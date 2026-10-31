@@ -10,7 +10,7 @@
 #    sudo ./prepare_sd_card.sh /caminho/do/ponto_de_montagem_rootfs [usuario] [senha]
 #  Exemplo:
 #    sudo ./prepare_sd_card.sh /media/$USER/armbi_root
-#    sudo ./prepare_sd_card.sh /media/$USER/armbi_root meuuser minhasenha123
+#    sudo ./prepare_sd_card.sh /media/$USER/armbi_root victor senhaforte2026
 # ============================================================================
 
 set -euo pipefail
@@ -30,7 +30,7 @@ if [ "$#" -lt 1 ]; then
 fi
 
 TARGET_ROOTFS="$1"
-CUSTOM_USER="${2:-admin}"
+CUSTOM_USER="${2:-vimora}"
 CUSTOM_PASS="${3:-SENHA_REMOVIDA}"
 
 if [ ! -d "${TARGET_ROOTFS}/etc" ] || [ ! -d "${TARGET_ROOTFS}/root" ]; then
@@ -52,9 +52,9 @@ mkdir -p "${TARGET_ROOTFS}/root/Mini-Server"
 cp -r "${SCRIPT_DIR}/"* "${TARGET_ROOTFS}/root/Mini-Server/"
 chmod +x "${TARGET_ROOTFS}/root/Mini-Server"/*.sh
 
-# Se foram passadas credenciais customizadas, injeta no script autorun
-if [ "$CUSTOM_USER" != "admin" ] || [ "$CUSTOM_PASS" != "SENHA_REMOVIDA" ]; then
-    sed -i "s/DEFAULT_USER=\"admin\"/DEFAULT_USER=\"${CUSTOM_USER}\"/g" "${TARGET_ROOTFS}/root/Mini-Server/autorun-headless.sh"
+# Se foram passadas credenciais customizadas diferentes do padrão vimora
+if [ "$CUSTOM_USER" != "vimora" ] || [ "$CUSTOM_PASS" != "SENHA_REMOVIDA" ]; then
+    sed -i "s/DEFAULT_USER=\"vimora\"/DEFAULT_USER=\"${CUSTOM_USER}\"/g" "${TARGET_ROOTFS}/root/Mini-Server/autorun-headless.sh"
     sed -i "s/DEFAULT_PASS=\"SENHA_REMOVIDA\"/DEFAULT_PASS=\"${CUSTOM_PASS}\"/g" "${TARGET_ROOTFS}/root/Mini-Server/autorun-headless.sh"
 fi
 

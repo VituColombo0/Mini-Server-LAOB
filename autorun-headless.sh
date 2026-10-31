@@ -52,7 +52,7 @@ if [ -f /root/.not_logged_in_yet ]; then
 fi
 
 # 3. Definir credenciais padrão seguras
-DEFAULT_USER="admin"
+DEFAULT_USER="vimora"
 DEFAULT_PASS="SENHA_REMOVIDA"
 
 echo "root:${DEFAULT_PASS}" | chpasswd
