@@ -26,7 +26,7 @@ NC='\033[0m'
 BOLD='\033[1m'
 
 # ── Credenciais Padrão Unificadas (Altere via parâmetro ou variável se desejar)
-SERVER_USER="${SERVER_USER:-admin}"
+SERVER_USER="${SERVER_USER:-vimora}"
 SERVER_PASS="${SERVER_PASS:-SENHA_REMOVIDA}"
 
 # ── Portas dos Serviços ────────────────────────────────────────────────────
