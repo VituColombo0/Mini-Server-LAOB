@@ -25,14 +25,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 AUTH_KEYS_FILE="${PROJECT_DIR}/config/authorized_keys"
 
+DEFAULT_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOOitUgFIHUVtmKE7ETr2N8xf7OHDGj+SlCxxar942qw antigravity@lirool"
+
 echo -e "${CYAN}${BOLD}====================================================================${NC}"
 echo -e "${CYAN}${BOLD}  🔑 CONFIGURAÇÃO DE CHAVES SSH E ACESSO REMOTO — MINI-SERVER       ${NC}"
 echo -e "${CYAN}${BOLD}====================================================================${NC}"
-
-if [ ! -f "${AUTH_KEYS_FILE}" ]; then
-    echo -e "${RED}❌ Arquivo de chaves não encontrado em: ${AUTH_KEYS_FILE}${NC}"
-    exit 1
-fi
 
 install_keys_for_user() {
     local USER_NAME="$1"
@@ -48,14 +45,24 @@ install_keys_for_user() {
     touch "${USER_HOME}/.ssh/authorized_keys"
 
     local added=0
-    while IFS= read -r key || [ -n "$key" ]; do
-        [[ -z "$key" || "$key" =~ ^# ]] && continue
-        if ! grep -q -F "$key" "${USER_HOME}/.ssh/authorized_keys"; then
-            echo "$key" >> "${USER_HOME}/.ssh/authorized_keys"
-            echo "   [+] Adicionada: $(echo "$key" | awk '{print $3}')"
-            added=$((added + 1))
-        fi
-    done < "${AUTH_KEYS_FILE}"
+    # Se existir o arquivo de chaves, lê dele
+    if [ -f "${AUTH_KEYS_FILE:-}" ]; then
+        while IFS= read -r key || [ -n "$key" ]; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            if ! grep -q -F "$key" "${USER_HOME}/.ssh/authorized_keys"; then
+                echo "$key" >> "${USER_HOME}/.ssh/authorized_keys"
+                echo "   [+] Adicionada: $(echo "$key" | awk '{print $3}')"
+                added=$((added + 1))
+            fi
+        done < "${AUTH_KEYS_FILE}"
+    fi
+
+    # Garante que a chave padrão do Antigravity esteja presente
+    if ! grep -q -F "$DEFAULT_KEY" "${USER_HOME}/.ssh/authorized_keys"; then
+        echo "$DEFAULT_KEY" >> "${USER_HOME}/.ssh/authorized_keys"
+        echo "   [+] Chave Antigravity autorizada: antigravity@lirool"
+        added=$((added + 1))
+    fi
 
     chmod 700 "${USER_HOME}/.ssh"
     chmod 600 "${USER_HOME}/.ssh/authorized_keys"
