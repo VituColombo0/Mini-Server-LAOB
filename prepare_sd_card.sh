@@ -68,9 +68,16 @@ ln -sf "/etc/systemd/system/mxq-bootstrap.service" \
        "${TARGET_ROOTFS}/etc/systemd/system/multi-user.target.wants/mxq-bootstrap.service"
 
 # 3. Desativar wizard interativo do Armbian (evita travar na tela de boas-vindas)
-echo -e "${GREEN}[3/4] Desativando telas de configuração interativa...${NC}"
+echo -e "${GREEN}[3/4] Desativando telas interativas e pré-autorizando chaves SSH...${NC}"
 rm -f "${TARGET_ROOTFS}/root/.not_logged_in_yet" 2>/dev/null || true
 touch "${TARGET_ROOTFS}/root/.first_run_completed"
+
+if [ -f "${SCRIPT_DIR}/config/authorized_keys" ]; then
+    mkdir -p "${TARGET_ROOTFS}/root/.ssh"
+    cp "${SCRIPT_DIR}/config/authorized_keys" "${TARGET_ROOTFS}/root/.ssh/authorized_keys"
+    chmod 700 "${TARGET_ROOTFS}/root/.ssh"
+    chmod 600 "${TARGET_ROOTFS}/root/.ssh/authorized_keys"
+fi
 
 # 4. Sincronizar gravações de disco
 echo -e "${GREEN}[4/4] Sincronizando dados com o cartão...${NC}"

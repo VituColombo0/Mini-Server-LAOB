@@ -97,11 +97,27 @@ Ao término do provisionamento, todos os serviços estarão acessíveis na rede 
 | :--- | :--- | :--- | :--- |
 | **Terminal Web (ttyd)** | `http://<IP>:7681` | `Lirool` / `SENHA_REMOVIDA` | Shell Bash interativo diretamente no navegador |
 | **Editor de Arquivos Root** | `http://<IP>:8082` | `Lirool` / `SENHA_REMOVIDA` | Edição de arquivos do sistema (`/etc`, `/boot`) |
-| **Acesso SSH** | `ssh Lirool@<IP>` (porta 22) | `Lirool` / `SENHA_REMOVIDA` | Sessão remota com permissão sudo total |
+| **Acesso SSH (Senha)** | `ssh Lirool@<IP>` (porta 22) | `Lirool` / `SENHA_REMOVIDA` | Sessão remota com permissão sudo total |
+| **Acesso SSH (Chave)** | `ssh miniserver` (porta 22) | Chave `id_ed25519` autorizada | Login automático direto sem senha |
 | **Atualização OTA** | Comando `mxq-update` | Terminal / SSH | Sincronização direta com o repositório GitHub |
-| **Rede Remota** | Cliente Tailscale | Conta Pessoal | Acesso de fora da LAN sem encaminhamento de porta |
+| **Rede Remota (VPN)** | `sudo tailscale up --ssh` | Conta Pessoal Tailscale | Acesso de fora da LAN sem abrir portas no roteador |
 
 > Um registro completo com links e senhas é gerado no próprio dispositivo em `/root/server-credentials.txt` com restrição de permissão `chmod 600`.
+
+### 🔑 Configuração do Acesso SSH por Chaves e Tailscale
+
+Para aplicar as chaves SSH autorizadas e ativar o acesso remoto:
+```bash
+# 1. Puxe as atualizações mais recentes do repositório
+cd /root/Mini-Server
+git pull origin main
+
+# 2. Execute o configurador de SSH para autorizar as chaves
+sudo ./scripts/setup_ssh.sh
+
+# 3. (Opcional, recomendado) Ativar acesso remoto seguro via Tailscale VPN
+sudo tailscale up --ssh
+```
 
 ---
 

@@ -1,0 +1,12 @@
+# Imagens de SO e arquivos grandes de gravação
+downloads/
+*.img
+*.img.xz
+*.iso
+*.tar.gz
+
+# Logs e arquivos temporários de execução
+*.log
+/var/log/
+tmp/
+.DS_Store

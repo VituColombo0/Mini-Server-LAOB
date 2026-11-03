@@ -1,0 +1,9 @@
+# ==============================================================================
+# Chaves SSH Autorizadas — Mini-Server
+# ==============================================================================
+# Adicione aqui as chaves públicas (uma por linha) que terão acesso SSH
+# automático ao servidor sem requisição de senha.
+# ==============================================================================
+
+# Chave do Agente Antigravity / Computador de Desenvolvimento (lirool)
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOOitUgFIHUVtmKE7ETr2N8xf7OHDGj+SlCxxar942qw antigravity@lirool

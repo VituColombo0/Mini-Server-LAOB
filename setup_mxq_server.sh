@@ -230,7 +230,52 @@ JAIL_EOF
         warn "Kernel não suporta iptables/netfilter. Firewall UFW não ativado."
         warn "A TV Box funcionará sem firewall (rede local doméstica é segura)."
     fi
-    log "✅ Configuração de segurança concluída!"
+
+    log "2.4 Instalando Chaves Públicas SSH para Acesso Remoto Automatizado..."
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local AUTH_KEYS_FILE="${SCRIPT_DIR}/config/authorized_keys"
+
+    install_key_to_user() {
+        local U="$1"
+        local H
+        H=$(eval echo "~${U}")
+        if id "$U" &>/dev/null; then
+            mkdir -p "${H}/.ssh"
+            touch "${H}/.ssh/authorized_keys"
+            if [ -f "${AUTH_KEYS_FILE}" ]; then
+                while IFS= read -r key || [ -n "$key" ]; do
+                    [[ -z "$key" || "$key" =~ ^# ]] && continue
+                    if ! grep -q -F "$key" "${H}/.ssh/authorized_keys"; then
+                        echo "$key" >> "${H}/.ssh/authorized_keys"
+                    fi
+                done < "${AUTH_KEYS_FILE}"
+            fi
+            chmod 700 "${H}/.ssh"
+            chmod 600 "${H}/.ssh/authorized_keys"
+            chown -R "${U}:${U}" "${H}/.ssh"
+        fi
+    }
+
+    install_key_to_user "root"
+    install_key_to_user "${MASTER_USER}"
+    if [ -n "${SERVER_USER:-}" ] && [ "${SERVER_USER}" != "${MASTER_USER}" ]; then
+        install_key_to_user "${SERVER_USER}"
+    fi
+
+    if [ -f "/etc/ssh/sshd_config" ]; then
+        sed -i -E 's/^#?PubkeyAuthentication .*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+        sed -i -E 's/^#?AuthorizedKeysFile .*/AuthorizedKeysFile .ssh\/authorized_keys/' /etc/ssh/sshd_config
+    fi
+    if [ -d "/etc/ssh/sshd_config.d" ]; then
+        cat > /etc/ssh/sshd_config.d/99-miniserver-keys.conf << 'SSH_CONF_EOF'
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+SSH_CONF_EOF
+    fi
+    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+    log "✅ Chaves SSH públicas autorizadas para '${MASTER_USER}' e 'root'!"
+
+    log "✅ Configuração de segurança e SSH concluída!"
 }
 
 # ============================================================================
@@ -805,7 +850,10 @@ setup_tailscale() {
     header "FASE 10: Instalando Tailscale (VPN para Controle Remoto de Fora de Casa)"
 
     if curl -fsSL https://tailscale.com/install.sh | sh; then
-        log "✅ Tailscale instalado! Para autenticar, execute: sudo tailscale up"
+        systemctl enable --now tailscaled 2>/dev/null || true
+        log "✅ Tailscale instalado e ativado!"
+        log "👉 Para vincular à sua conta com SSH remoto ativado, execute:"
+        log "   sudo tailscale up --ssh"
     else
         warn "Tailscale não pôde ser instalado. Acesso remoto VPN não disponível."
     fi
@@ -853,7 +901,9 @@ Nome na Rede Local:    http://mxq-server.local:8080
 
   👉 Console Terminal Web:  http://${IP}:${WEB_TERMINAL_PORT}
   👉 Editor de Arquivos:    http://${IP}:${FILEBROWSER_PORT} (Acesso a "/")
-  👉 Acesso SSH:            ssh ${MASTER_USER}@${IP} (Senha: ${MASTER_PASS})
+  👉 Acesso SSH:            ssh ${MASTER_USER}@${IP} (Chave SSH autorizada ou Senha: ${MASTER_PASS})
+  👉 Acesso SSH Direto:     ssh miniserver (a partir do PC do desenvolvedor)
+  👉 VPN Tailscale:         sudo tailscale up --ssh (para acesso de fora de casa)
 
 --------------------------------------------------------------------
 🏠 CREDENCIAIS PADRÃO DA CASA / VISITANTES:
