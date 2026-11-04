@@ -103,7 +103,7 @@ fi
 
 # 4. Exibir IPs e comandos prontos para conexão
 LOCAL_IPS=$(hostname -I 2>/dev/null || true)
-TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || true)
+TAILSCALE_IP=$(timeout 2 tailscale ip -4 2>/dev/null || true)
 
 echo ""
 echo -e "${GREEN}${BOLD}====================================================================${NC}"
