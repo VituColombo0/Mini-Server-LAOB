@@ -128,9 +128,11 @@ ZRAM_EOF
     fi
 
     log "1.3 Otimizando gravações em disco (Proteção para MicroSD/eMMC)..."
-    if grep -q "defaults" /etc/fstab && ! grep -q "noatime" /etc/fstab; then
-        sed -i 's/defaults/defaults,noatime,nodiratime,commit=60/g' /etc/fstab
-        log "✅ Parâmetros noatime e commit=60 aplicados no fstab."
+    if grep -q "ext4" /etc/fstab && ! grep -q "noatime" /etc/fstab; then
+        sed -i '/ext4/s/defaults/defaults,noatime,nodiratime,commit=60/g' /etc/fstab
+        # Garantir que tmpfs nunca tenha commit=60
+        sed -i '/tmpfs/s/commit=60,//g' /etc/fstab
+        log "✅ Parâmetros noatime e commit=60 aplicados no fstab (apenas ext4)."
     fi
 
     mkdir -p /etc/systemd/journald.conf.d/
