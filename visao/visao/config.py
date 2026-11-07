@@ -73,6 +73,7 @@ DEFAULTS = {
         # O alto-falante da Tapo só aceita áudio pelo protocolo próprio da TP-Link, que pede a
         # senha da CONTA TAPO (a do app/nuvem), não a "Conta da câmera" usada no RTSP.
         "tapo_cloud_password": "",
+        "tapo_auth": "sha256",               # sha256 (firmwares novos da C200) | md5 | plain
     },
     "security": {
         "enabled": False,          # modo segurança: movimento no horário abaixo vira alerta

@@ -78,7 +78,7 @@ class Speaker:
         return path
 
     def play_camera(self, path):
-        src = f"ffmpeg:{path}#audio=pcma#input=file"
+        src = f"ffmpeg:{path}#audio=pcma/8000#input=file"  # G.711 A-law 8 kHz mono, o que a C200 aceita
         url = (f"{self.cfg.go2rtc_url}/api/streams?dst={urllib.parse.quote(self.cfg.stream)}"
                f"&src={urllib.parse.quote(src, safe='')}")
         req = urllib.request.Request(url, method="POST")

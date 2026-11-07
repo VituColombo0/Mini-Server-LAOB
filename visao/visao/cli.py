@@ -173,12 +173,61 @@ def cmd_falar(a):
     return 0
 
 
+def tapo_url(g, host, auth=None):
+    """URL tapo:// do go2rtc. Firmwares novos da C200 pedem admin + SHA256 MAIÚSCULO da senha."""
+    import hashlib
+    from urllib.parse import quote
+    pw = g.tapo_cloud_password
+    auth = (auth or g.tapo_auth).lower()
+    if auth == "sha256":
+        return f"tapo://admin:{hashlib.sha256(pw.encode()).hexdigest().upper()}@{host}"
+    if auth == "md5":
+        return f"tapo://admin:{hashlib.md5(pw.encode()).hexdigest().upper()}@{host}"
+    return f"tapo://{quote(pw, safe='')}@{host}"
+
+
+def cmd_testar_camera(a):
+    """UMA tentativa de login de áudio na câmera (evita bloquear a conta); se der certo, fala."""
+    import re
+    import subprocess
+    import tempfile
+    g, cam = cfg.greeting, cfg.camera
+    if not g.tapo_cloud_password:
+        print("preencha greeting.tapo_cloud_password no /opt/visao/config.toml")
+        return 1
+    auth = a.modo or g.tapo_auth
+    with tempfile.TemporaryDirectory(dir=cfg.storage.runtime_dir) as d:
+        conf = os.path.join(d, "g2t.yaml")
+        with open(os.open(conf, os.O_WRONLY | os.O_CREAT, 0o600), "w") as f:
+            f.write("api:\n  listen: \"127.0.0.1:1985\"\nrtsp:\n  listen: \"127.0.0.1:8555\"\n"
+                    "webrtc:\n  listen: \"\"\nlog:\n  level: info\n"
+                    f"streams:\n  camera:\n    - \"{tapo_url(g, cam.host, auth)}\"\n")
+        p = subprocess.Popen(["/opt/visao/bin/go2rtc", "-config", conf], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True)
+        try:
+            time.sleep(2)
+            r = subprocess.run(["timeout", "25", "ffprobe", "-v", "error", "-rtsp_transport", "tcp",
+                                "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0",
+                                "rtsp://127.0.0.1:8555/camera"], capture_output=True, text=True)
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+    streams = r.stdout.strip().replace("\n", " ")
+    if not streams:
+        errs = [re.sub(r"tapo://[^@ ]*@", "tapo://***@", l) for l in out.splitlines()
+                if "WRN" in l or "ERR" in l]
+        print(f"[{auth}] câmera recusou: {errs[-1][-80:] if errs else 'sem resposta'}")
+        return 1
+    print(f"[{auth}] login aceito! streams: {streams}")
+    return 0
+
+
 def cmd_go2rtc_config(a):
     """Gera a configuração do go2rtc (stream da câmera com áudio de duas vias)."""
     from urllib.parse import quote
     cam, g = cfg.camera, cfg.greeting
     if g.tapo_cloud_password:
-        src = f"tapo://admin:{quote(g.tapo_cloud_password, safe='')}@{cam.host}"
+        src = tapo_url(g, cam.host)
     else:
         src = f"rtsp://{quote(cam.user, safe='')}:{quote(cam.password, safe='')}@{cam.host}:{cam.rtsp_port}/{cam.sub_stream}"
     text = ("# gerado por: visao-cli go2rtc-config (não edite; mude o /opt/visao/config.toml)\n"
@@ -217,6 +266,9 @@ def main():
     sp = sub.add_parser("go2rtc-config")
     sp.add_argument("--saida", default="/opt/visao/go2rtc.yaml")
     sp.set_defaults(fn=cmd_go2rtc_config)
+    sp = sub.add_parser("testar-camera", help="uma tentativa de login de áudio na Tapo")
+    sp.add_argument("--modo", choices=["sha256", "md5", "plain"])
+    sp.set_defaults(fn=cmd_testar_camera)
     sp = sub.add_parser("falar")
     sp.add_argument("texto")
     sp.set_defaults(fn=cmd_falar)
