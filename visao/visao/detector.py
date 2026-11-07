@@ -1,0 +1,553 @@
+"""Serviço principal: lê a câmera, detecta e reconhece rostos e registra a presença.
+
+Fluxo de cada ciclo:
+  1. pega o quadro mais recente do stream de 720p;
+  2. decide se vale analisar (movimento da câmera/ONVIF, pan/tilt girando,
+     movimento na imagem, rostos sendo acompanhados ou varredura periódica);
+  3. detecta rostos, acompanha cada um entre ciclos e mede a qualidade;
+  4. reconhece só os rostos bons que ainda não foram identificados;
+  5. atualiza sessões de presença, gera eventos, fotos, clipes e alertas.
+"""
+import json
+import logging
+import os
+import shutil
+import signal
+import threading
+import time
+import unicodedata
+from collections import deque
+from datetime import datetime
+
+import cv2
+import numpy as np
+
+from . import db
+from .camera import FrameSource, OnvifWatcher, Recorder
+from .config import load, rtsp_url
+from .enroll import member_dir, process_pending
+from .faces import FaceEngine, Gallery
+from .notify import Notifier
+from .presence import Presence
+from .tracker import Tracker
+
+log = logging.getLogger("visao.detector")
+
+GREEN, RED, YELLOW, GRAY = (80, 200, 80), (60, 60, 230), (0, 200, 230), (180, 180, 180)
+
+
+def cpu_temp():
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return round(int(f.read().strip()) / 1000, 1)
+    except Exception:
+        return None
+
+
+def ascii_label(text):
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+
+
+def annotate(frame, items):
+    img = frame.copy()
+    for face, label, color in items:
+        x, y, w, h = face.box
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+        if label:
+            label = ascii_label(label)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            y0 = max(th + 8, y)
+            cv2.rectangle(img, (x, y0 - th - 8), (x + tw + 6, y0), color, -1)
+            cv2.putText(img, label, (x + 3, y0 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2)
+    return img
+
+
+class Detector:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        st, dc = cfg.storage, cfg.detection
+        self.data, self.run_dir = st.data_dir, st.runtime_dir
+        os.makedirs(self.data, exist_ok=True)
+        os.makedirs(self.run_dir, exist_ok=True)
+        self.db_path = os.path.join(self.data, "visao.db")
+        self.con = db.connect(self.db_path)
+        self.engine = FaceEngine(st.models_dir, dc.det_width, dc.det_score_min, dc.threads)
+        self.gallery, self.gallery_version = Gallery(), None
+        self.tracker = Tracker(ttl=dc.track_ttl_s)
+        self.presence = Presence(self.con, cfg.presence.session_gap_min * 60)
+        self.notifier = Notifier(cfg.telegram.token, cfg.telegram.chat_id)
+        self.notifier.start()
+        self.src = FrameSource(rtsp_url(cfg.camera, "sub"), dc.frame_every)
+        self.src.start()
+        self.onvif = OnvifWatcher(cfg.camera)
+        self.onvif.start()
+        self.rec = None
+        if st.record_clips:
+            self.rec = Recorder(rtsp_url(cfg.camera, "main"), os.path.join(self.run_dir, "segments"))
+            self.rec.start()
+        self.low = deque(maxlen=80)            # leituras com similaridade baixa (possível desconhecido)
+        self.recent_unknown = deque(maxlen=50)  # (ts, embedding) de alertas já enviados
+        self.recent_uncertain = deque(maxlen=50)
+        self.pending_accepts = {}  # member_id -> ts da última leitura aceita ainda sem confirmação
+        self.prev_small, self.sw_motion_ts = None, 0.0
+        self.last_scan = self.last_live = self.last_status = 0.0
+        self.cycle_ms, self.last_faces = 0.0, 0
+        self.capture, self.capture_embs, self.last_capture_ts = None, [], 0.0
+        self.last_auto = {}
+        self._timers = {}
+        self.mode = None
+        self.stopping = False
+
+    # ------------------------------------------------------------------ loop
+    def every(self, name, period):
+        now = time.time()
+        if now - self._timers.get(name, 0.0) >= period:
+            self._timers[name] = now
+            return True
+        return False
+
+    def run(self):
+        log.info("detector iniciado")
+        last_seq = -1
+        while not self.stopping:
+            now = time.time()
+            try:
+                self.housekeeping(now)
+            except Exception:
+                log.exception("erro na manutenção")
+            frame, fts, seq = self.src.latest()
+            if frame is None or seq == last_seq:
+                self.write_status(now, self.mode if self.src.online else None)
+                time.sleep(0.05)
+                continue
+            last_seq = seq
+            self.update_sw_motion(frame, now)
+            mode = self.mode = self.activity(now)
+            interval = {"ativo": 0.0, "acompanhando": self.cfg.detection.idle_track_interval_s,
+                        "ocioso": self.cfg.detection.heartbeat_s}[mode]
+            if now - self.last_scan < interval:
+                if now - self.last_live > 10:
+                    self.write_live(frame, [], now)
+                self.write_status(now, mode)
+                time.sleep(0.05)
+                continue
+            t0 = time.perf_counter()
+            try:
+                self.process(frame, fts)
+            except Exception:
+                log.exception("erro ao processar quadro")
+            self.cycle_ms = (time.perf_counter() - t0) * 1000
+            self.last_scan = now
+            self.write_status(now, mode)
+        self.shutdown()
+
+    def activity(self, now):
+        if (self.capture is not None or self.onvif.motion_recent(8) or self.onvif.ptz_recent(4)
+                or now - self.sw_motion_ts < 4):
+            return "ativo"
+        if self.tracker.alive(now, self.cfg.detection.track_ttl_s):
+            return "acompanhando"
+        return "ocioso"
+
+    def update_sw_motion(self, frame, now):
+        # amostragem simples (1 a cada 8 px): barata e sem acionar o pool de threads do OpenCV
+        step = max(1, frame.shape[1] // 160)
+        small = np.ascontiguousarray(frame[::step, ::step, 1])
+        small = cv2.GaussianBlur(small, (5, 5), 0)
+        if self.prev_small is not None:
+            diff = cv2.absdiff(small, self.prev_small)
+            if np.count_nonzero(diff > 25) / diff.size > 0.01:
+                self.sw_motion_ts = now
+        self.prev_small = small
+
+    # ----------------------------------------------------------- manutenção
+    def housekeeping(self, now):
+        if self.every("gallery", 3):
+            v = db.get_meta(self.con, "gallery_version", "0")
+            if v != self.gallery_version:
+                self.gallery.load(self.con)
+                self.gallery_version = v
+                valid = set(self.gallery.names)
+                self.presence.drop_missing(valid)
+                self.tracker.forget_member(valid)
+                log.info("galeria carregada: %d amostras de %d membros",
+                         len(self.gallery), len(set(self.gallery.labels.tolist())))
+        if self.every("pending", 3):
+            process_pending(self.con, self.engine, self.data)
+        if self.every("capture", 2):
+            self.poll_capture(now)
+        if self.every("presence", 15):
+            self.presence.flush()
+            for s in self.presence.close_stale(now):
+                log.info("%s saiu (visto pela última vez às %s)", self.gallery.names.get(s["member_id"]),
+                         datetime.fromtimestamp(s["last_seen_ts"]).strftime("%H:%M"))
+        if self.every("retention", 3600):
+            self.retention(now)
+
+    def poll_capture(self, now):
+        if self.capture is not None:
+            row = self.con.execute("SELECT status FROM capture_requests WHERE id=?",
+                                   (self.capture["id"],)).fetchone()
+            if row is None or row["status"] != "ativo":
+                self.capture = None
+            elif now > self.capture["until_ts"]:
+                self.finish_capture("expirado")
+            return
+        row = self.con.execute(
+            "SELECT * FROM capture_requests WHERE status='ativo' ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            return
+        if row["until_ts"] < now:
+            self.con.execute("UPDATE capture_requests SET status='expirado' WHERE id=?", (row["id"],))
+            return
+        self.capture, self.capture_embs = dict(row), []
+        log.info("captura de amostras iniciada para o membro %s", row["member_id"])
+
+    def finish_capture(self, status):
+        c = self.capture
+        self.con.execute("UPDATE capture_requests SET status=?, captured=? WHERE id=?",
+                         (status, c["captured"], c["id"]))
+        log.info("captura %s: %d amostras", status, c["captured"])
+        self.capture = None
+
+    def retention(self, now):
+        st = self.cfg.storage
+        limit = now - st.retention_days * 86400
+        cutoff = datetime.fromtimestamp(limit).strftime("%Y-%m-%d")
+        for sub in ("events", "clips"):
+            base = os.path.join(self.data, sub)
+            if os.path.isdir(base):
+                for d in sorted(os.listdir(base)):
+                    if d < cutoff:
+                        shutil.rmtree(os.path.join(base, d), ignore_errors=True)
+        # histórico inteiro mais antigo que o limite: presenças, eventos e pedidos de captura
+        # (as amostras dos membros ficam, pois são o cadastro)
+        n_s = self.con.execute("DELETE FROM sessions WHERE end_ts IS NOT NULL AND end_ts < ?",
+                               (limit,)).rowcount
+        n_e = self.con.execute("DELETE FROM events WHERE ts < ?", (limit,)).rowcount
+        self.con.execute("DELETE FROM capture_requests WHERE created_at < ?", (limit,))
+        if n_s or n_e:
+            log.info("retenção: apagados %d presenças e %d eventos anteriores a %s", n_s, n_e, cutoff)
+        clips = os.path.join(self.data, "clips")
+        while shutil.disk_usage(self.data).free / 1e6 < st.min_free_mb and os.path.isdir(clips):
+            days = sorted(os.listdir(clips))
+            if not days:
+                break
+            log.warning("pouco espaço em disco; apagando clipes de %s", days[0])
+            shutil.rmtree(os.path.join(clips, days[0]), ignore_errors=True)
+
+    # -------------------------------------------------------------- análise
+    def process(self, frame, ts):
+        dc = self.cfg.detection
+        faces = self.engine.detect(frame)
+        self.last_faces = len(faces)
+        matched, expired = self.tracker.update(faces, ts)
+        for t in expired:
+            self.on_track_end(t)
+        cands = []
+        for t, f in matched:
+            if f.w < dc.min_face_px * 0.8:
+                continue
+            aligned, q, ok = self.engine.assess(frame, f, dc)
+            t.cur = (aligned, q, ok)
+            if t.member_id is not None:
+                self.presence.touch(t.member_id, ts)
+            if not ok:
+                continue
+            if t.member_id is None:
+                if len(t.attempts) < dc.max_attempts:
+                    cands.append((0, -q["q"], t))
+            elif ts - t.last_rec_ts > dc.reverify_s:
+                cands.append((1, -q["q"], t))
+        cands.sort(key=lambda c: (c[0], c[1]))
+        for _, _, t in cands[: dc.max_rec_per_cycle]:
+            aligned, q, _ = t.cur
+            self.recognize(t, self.engine.embed(aligned), aligned, q, frame, ts)
+        if self.capture is not None:
+            self.capture_step(matched, ts)
+        self.write_live(frame, matched, ts)
+
+    def recognize(self, t, emb, aligned, q, frame, ts):
+        dc = self.cfg.detection
+        t.last_rec_ts, t.last_emb, t.last_emb_ts = ts, emb, ts
+        matches = self.gallery.match(emb)
+        m1, s1 = matches[0] if matches else (None, -1.0)
+        s2 = matches[1][1] if len(matches) > 1 else -1.0
+        t.attempts.append((m1, s1, q["q"]))
+        if t.best is None or q["q"] > t.best["q"]:
+            t.best = {"q": q["q"], "aligned": aligned, "emb": emb, "frame": frame, "face": t.face,
+                      "ts": ts, "guess": m1, "score": s1}
+        accepted = m1 is not None and s1 >= dc.accept and (s1 - s2) >= dc.margin
+        if accepted and not self.confirmed(t, m1, s1, ts):
+            # uma leitura só, sem muita certeza: espera a próxima confirmar (menos erros)
+            log.debug("track %d: %s (%.2f) aguardando confirmação", t.id, self.gallery.names.get(m1), s1)
+            return
+        if accepted:
+            if t.member_id is None or (t.member_id != m1 and s1 >= t.member_score + 0.05):
+                t.member_id, t.member_score = m1, s1
+            if t.member_id == m1:
+                t.member_score = max(t.member_score, s1)
+            new = self.presence.seen(t.member_id, ts, s1)
+            if new:
+                self.on_entry(new, t, frame, aligned, ts, s1, emb)
+            self.maybe_auto_enrich(t.member_id, emb, aligned, q, s1, ts)
+            log.debug("track %d = %s (%.2f)", t.id, self.gallery.names.get(t.member_id), s1)
+        elif t.member_id is not None and s1 < dc.unknown:
+            # a reconfirmação falhou feio: provavelmente outra pessoa entrou no lugar
+            t.member_id, t.member_score = None, 0.0
+        elif t.member_id is None and len(self.gallery) and s1 < dc.unknown:
+            self.low_reading(t, emb, aligned, frame, ts, s1, m1)
+
+    def confirmed(self, t, m1, s1, ts):
+        """Aceita a identificação com certeza alta, ou quando duas leituras concordam."""
+        dc = self.cfg.detection
+        if t.member_id == m1 or s1 >= dc.strong_accept:
+            return True
+        prev = self.pending_accepts.get(m1)
+        self.pending_accepts[m1] = ts
+        agree_track = sum(1 for a in t.attempts[:-1] if a[0] == m1 and a[1] >= dc.accept - 0.04)
+        return agree_track >= 1 or (prev is not None and ts - prev <= 20)
+
+    def low_reading(self, t, emb, aligned, frame, ts, s1, m1):
+        """Junta leituras ruins parecidas entre si; com várias, alerta 'desconhecido'."""
+        dc = self.cfg.detection
+        while self.low and ts - self.low[0]["ts"] > 90:
+            self.low.popleft()
+        similar = sum(1 for x in self.low if float(x["emb"] @ emb) >= dc.same_person)
+        self.low.append({"ts": ts, "emb": emb})
+        if t.reported or similar + 1 < dc.unknown_attempts:
+            return
+        t.reported = True
+        for uts, uemb in self.recent_unknown:
+            if ts - uts < dc.unknown_cooldown_s and float(uemb @ emb) >= dc.same_person:
+                return  # mesma pessoa já gerou alerta há pouco
+        self.recent_unknown.append((ts, emb))
+        snap, crop = self.save_images("desconhecido", frame, t.face, aligned, ts, t.id,
+                                      "Desconhecido", RED)
+        cur = self.con.execute(
+            "INSERT INTO events(ts, kind, score, guess_member_id, snapshot_path, crop_path, embedding) "
+            "VALUES(?, 'unknown', ?, ?, ?, ?, ?)", (ts, s1, m1, snap, crop, db.emb_to_blob(emb)))
+        self.schedule_clip(ts, cur.lastrowid, None)
+        log.warning("pessoa não identificada (similaridade máx. %.2f)", s1)
+        if self.cfg.telegram.notify_unknown:
+            hora = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+            self.notifier.send(f"⚠️ Pessoa não identificada no laboratório às {hora}",
+                               os.path.join(self.data, snap))
+
+    def on_entry(self, s, t, frame, aligned, ts, score, emb):
+        name = self.gallery.names.get(s["member_id"], "?")
+        snap, crop = self.save_images("entrada", frame, t.face, aligned, ts, t.id, name, GREEN)
+        cur = self.con.execute(
+            "INSERT INTO events(ts, kind, member_id, session_id, score, snapshot_path, crop_path, embedding) "
+            "VALUES(?, 'entry', ?, ?, ?, ?, ?, ?)",
+            (ts, s["member_id"], s["id"], score, snap, crop, db.emb_to_blob(emb)))
+        self.con.execute("UPDATE sessions SET snapshot_path=?, crop_path=? WHERE id=?",
+                         (snap, crop, s["id"]))
+        self.schedule_clip(ts, cur.lastrowid, s["id"])
+        log.info("entrada: %s (%.2f)", name, score)
+        if self.cfg.telegram.notify_entries:
+            hora = datetime.fromtimestamp(ts).strftime("%H:%M")
+            self.notifier.send(f"✅ {name} chegou às {hora}", os.path.join(self.data, snap))
+
+    def on_track_end(self, t):
+        """Rosto sumiu sem ser identificado: guarda a melhor leitura para revisão."""
+        if t.member_id is not None or t.reported or t.best is None:
+            return
+        b = t.best
+        # Pedaço de acompanhamento de alguém que acabou de ser reconhecido (virou o rosto,
+        # andou): não é uma pessoa nova, só ruído.
+        guess = self.presence.open.get(b["guess"]) if b["guess"] is not None else None
+        if guess and b["score"] >= 0.12 and abs(b["ts"] - guess["last_seen_ts"]) < 120:
+            return
+        # Mesma pessoa não identificada vista há pouco: um registro basta.
+        for uts, uemb in self.recent_uncertain:
+            if b["ts"] - uts < 300 and float(uemb @ b["emb"]) >= self.cfg.detection.same_person:
+                return
+        self.recent_uncertain.append((b["ts"], b["emb"]))
+        snap, crop = self.save_images("revisar", b["frame"], b["face"], b["aligned"], b["ts"], t.id,
+                                      "?", YELLOW)
+        cur = self.con.execute(
+            "INSERT INTO events(ts, kind, score, guess_member_id, snapshot_path, crop_path, embedding) "
+            "VALUES(?, 'uncertain', ?, ?, ?, ?, ?)",
+            (b["ts"], b["score"], b["guess"], snap, crop, db.emb_to_blob(b["emb"])))
+        self.schedule_clip(b["ts"], cur.lastrowid, None)  # vídeo também de quem não foi identificado
+
+    def maybe_auto_enrich(self, member_id, emb, aligned, q, score, ts):
+        dc = self.cfg.detection
+        if not dc.auto_enrich or score < dc.auto_enrich_score or q["q"] < 0.35:
+            return
+        if ts - self.last_auto.get(member_id, 0.0) < 120:
+            return
+        sims = self.gallery.member_sims(member_id, emb)
+        if sims.size and float(sims.max()) >= 0.80:
+            return  # já existe uma amostra quase igual
+        autos = self.con.execute("SELECT id, crop_path FROM samples WHERE member_id=? AND source='auto' "
+                                 "AND status='ok' ORDER BY created_at", (member_id,)).fetchall()
+        # cheio: troca a amostra automática mais antiga (acompanha mudanças de cabelo, barba, óculos)
+        for old in autos[: max(0, len(autos) - dc.auto_enrich_max + 1)]:
+            if old["crop_path"]:
+                try:
+                    os.remove(os.path.join(self.data, old["crop_path"]))
+                except FileNotFoundError:
+                    pass
+            self.con.execute("DELETE FROM samples WHERE id=?", (old["id"],))
+        self.add_sample(member_id, "auto", aligned, emb, q["q"], ts,
+                        f"aprendida automaticamente (similaridade {score:.2f})")
+        self.last_auto[member_id] = ts
+
+    def capture_step(self, matched, ts):
+        c, dc = self.capture, self.cfg.detection
+        if len(matched) != 1 or ts - self.last_capture_ts < 1.2:
+            return
+        t, _ = matched[0]
+        if t.cur is None or not t.cur[2]:
+            return
+        aligned, q, _ = t.cur
+        emb = t.last_emb if t.last_emb_ts == ts else self.engine.embed(aligned)
+        if any(float(e @ emb) >= 0.92 for e in self.capture_embs):
+            return
+        m = self.gallery.match(emb)
+        if m and m[0][0] != c["member_id"] and m[0][1] >= dc.accept + 0.05:
+            return  # é outro membro já cadastrado na frente da câmera
+        self.add_sample(c["member_id"], "camera", aligned, emb, q["q"], ts, "capturada pela câmera")
+        self.capture_embs.append(emb)
+        self.last_capture_ts = ts
+        c["captured"] += 1
+        self.con.execute("UPDATE capture_requests SET captured=? WHERE id=?", (c["captured"], c["id"]))
+        if c["captured"] >= c["target"]:
+            self.finish_capture("concluido")
+
+    def add_sample(self, member_id, source, aligned, emb, quality, ts, message):
+        d = member_dir(self.data, member_id)
+        path = os.path.join(d, f"{source}_{datetime.fromtimestamp(ts).strftime('%Y%m%d-%H%M%S')}"
+                               f"_{int(ts * 1000) % 1000:03d}.jpg")
+        cv2.imwrite(path, aligned)
+        self.con.execute(
+            "INSERT INTO samples(member_id, source, status, message, crop_path, embedding, quality, created_at) "
+            "VALUES(?, ?, 'ok', ?, ?, ?, ?, ?)",
+            (member_id, source, message, os.path.relpath(path, self.data), db.emb_to_blob(emb), quality, ts))
+        db.bump_gallery(self.con)
+
+    # ------------------------------------------------------- arquivos/status
+    def day_dir(self, sub, ts):
+        d = os.path.join(self.data, sub, datetime.fromtimestamp(ts).strftime("%Y-%m-%d"))
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def save_images(self, kind, frame, face, aligned, ts, track_id, label, color):
+        d = self.day_dir("events", ts)
+        stem = f"{datetime.fromtimestamp(ts).strftime('%H%M%S')}_{kind}_{track_id}"
+        snap, crop = os.path.join(d, stem + ".jpg"), os.path.join(d, stem + "_rosto.jpg")
+        cv2.imwrite(snap, annotate(frame, [(face, label, color)]), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        cv2.imwrite(crop, aligned)
+        return os.path.relpath(snap, self.data), os.path.relpath(crop, self.data)
+
+    def schedule_clip(self, ts, event_id, session_id):
+        if self.rec is None:
+            return
+        st = self.cfg.storage
+        timer = threading.Timer(st.clip_after_s + 15, self._clip_job, (ts, event_id, session_id))
+        timer.daemon = True
+        timer.start()
+
+    def _clip_job(self, ts, event_id, session_id):
+        st = self.cfg.storage
+        out = os.path.join(self.day_dir("clips", ts),
+                           f"{datetime.fromtimestamp(ts).strftime('%H%M%S')}_evento{event_id}.mp4")
+        try:
+            if not self.rec.make_clip(ts - st.clip_before_s, ts + st.clip_after_s, out):
+                log.warning("não foi possível montar o clipe do evento %s", event_id)
+                return
+            rel = os.path.relpath(out, self.data)
+            con = db.connect(self.db_path)
+            try:
+                con.execute("UPDATE events SET clip_path=? WHERE id=?", (rel, event_id))
+                if session_id:
+                    con.execute("UPDATE sessions SET clip_path=? WHERE id=?", (rel, session_id))
+            finally:
+                con.close()
+        except Exception:
+            log.exception("erro ao montar clipe")
+
+    def write_live(self, frame, matched, ts):
+        items = []
+        for t, f in matched:
+            if t.member_id is not None:
+                items.append((f, self.gallery.names.get(t.member_id, "?"), GREEN))
+            elif t.reported:
+                items.append((f, "Desconhecido", RED))
+            else:
+                items.append((f, "", YELLOW if t.attempts else GRAY))
+        img = annotate(frame, items) if items else frame
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            tmp = os.path.join(self.run_dir, "live.jpg.tmp")
+            with open(tmp, "wb") as f:
+                f.write(buf.tobytes())
+            os.replace(tmp, os.path.join(self.run_dir, "live.jpg"))
+        self.last_live = ts
+
+    def write_status(self, now, mode):
+        if now - self.last_status < 2:
+            return
+        self.last_status = now
+        names = self.gallery.names
+        status = {
+            "ts": now,
+            "camera_online": self.src.online,
+            "decoder_fps": round(self.src.fps, 1),
+            "stream_size": self.src.size,
+            "recorder_online": bool(self.rec and self.rec.online),
+            "onvif": self.onvif.state,
+            "onvif_events": self.onvif.event_count,
+            "motion": self.onvif.motion_recent(8),
+            "ptz_moving": self.onvif.ptz_recent(4),
+            "sw_motion": now - self.sw_motion_ts < 4,
+            "mode": mode or "aguardando câmera",
+            "cycle_ms": round(self.cycle_ms),
+            "faces": self.last_faces,
+            "tracks": [{"id": t.id, "name": names.get(t.member_id) if t.member_id else None,
+                        "score": round(t.member_score, 2), "attempts": len(t.attempts)}
+                       for t in self.tracker.tracks.values()],
+            "present": [{"member_id": m, "name": names.get(m, "?"), "since": s["start_ts"],
+                         "last_seen": s["last_seen_ts"]} for m, s in self.presence.open.items()],
+            "gallery_samples": len(self.gallery),
+            "gallery_members": len(set(self.gallery.labels.tolist())),
+            "capture": ({"member_id": self.capture["member_id"], "captured": self.capture["captured"],
+                         "target": self.capture["target"]} if self.capture else None),
+            "cpu_temp": cpu_temp(),
+            "load": round(os.getloadavg()[0], 2),
+        }
+        tmp = os.path.join(self.run_dir, "status.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(status, f)
+        os.replace(tmp, os.path.join(self.run_dir, "status.json"))
+
+    def shutdown(self):
+        log.info("encerrando")
+        try:
+            self.presence.flush()
+        except Exception:
+            log.exception("erro ao salvar presença")
+        self.src.stop()
+        if self.rec:
+            self.rec.stop()
+        self.onvif.stop()
+
+
+def main():
+    logging.basicConfig(level=os.environ.get("VISAO_LOG", "INFO"),
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("zeep").setLevel(logging.WARNING)
+    det = Detector(load())
+
+    def _stop(*_):
+        det.stopping = True
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    det.run()
+
+
+if __name__ == "__main__":
+    main()

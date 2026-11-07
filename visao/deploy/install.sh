@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Instala ou atualiza o Visão no mini servidor. Rode como root a partir do repositório:
+#   sudo bash visao/deploy/install.sh
+set -euo pipefail
+
+SRC="$(cd "$(dirname "$0")/.." && pwd)"
+BASE=/opt/visao
+PIP_INDEX=(--index-url https://www.piwheels.org/simple --extra-index-url https://pypi.org/simple)
+ZOO=https://github.com/opencv/opencv_zoo/raw/main/models
+
+[ "$(id -u)" = 0 ] || { echo "rode como root (sudo)"; exit 1; }
+
+echo "[1/7] pacotes do sistema"
+apt-get install -y --no-install-recommends ffmpeg python3-venv rsync curl \
+  libopenblas0-pthread libwebpdemux2 libopenexr-3-1-30 >/dev/null
+
+echo "[2/7] usuário de serviço 'visao'"
+id visao >/dev/null 2>&1 || useradd --system --home-dir "$BASE" --no-create-home --shell /usr/sbin/nologin visao
+mkdir -p "$BASE"/{app,data,models}
+
+echo "[3/7] ambiente Python (pode demorar na primeira vez)"
+[ -x "$BASE/venv/bin/python" ] || python3 -m venv "$BASE/venv"
+"$BASE/venv/bin/pip" install -q --resume-retries 10 --timeout 120 "${PIP_INDEX[@]}" \
+  --prefer-binary -r "$SRC/requirements.txt"
+
+echo "[4/7] modelos de rosto (OpenCV Zoo)"
+for f in face_detection_yunet/face_detection_yunet_2023mar.onnx \
+         face_recognition_sface/face_recognition_sface_2021dec.onnx; do
+  dst="$BASE/models/$(basename "$f")"
+  [ -s "$dst" ] || curl -fsSL --retry 5 -o "$dst" "$ZOO/$f"
+done
+
+echo "[5/7] código"
+rsync -a --delete --exclude '__pycache__' "$SRC/visao/" "$BASE/app/visao/"
+install -m 755 "$SRC/deploy/visao-cli" /usr/local/bin/visao-cli
+
+echo "[6/7] configuração e permissões"
+if [ ! -f "$BASE/config.toml" ]; then
+  cp "$SRC/config.example.toml" "$BASE/config.toml"
+  echo "  >> edite $BASE/config.toml com o IP e a conta da câmera"
+fi
+chown root:visao "$BASE/config.toml"; chmod 640 "$BASE/config.toml"
+chown -R visao:visao "$BASE/data"; chmod 750 "$BASE/data"
+if [ ! -f "$BASE/data/web_auth.json" ]; then
+  PW="$("$BASE/venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(9))')"
+  printf '%s\n' "$PW" | visao-cli senha --stdin >/dev/null
+  ( umask 077; printf 'Senha inicial da interface do Visão: %s\nTroque com: visao-cli senha\n' "$PW" \
+      > /root/visao-senha-inicial.txt )
+  echo "  >> senha inicial da web salva em /root/visao-senha-inicial.txt"
+fi
+
+echo "[7/7] serviços"
+install -m 644 "$SRC/deploy/visao-detector.service" "$SRC/deploy/visao-web.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable visao-detector visao-web >/dev/null 2>&1
+systemctl restart visao-detector visao-web
+sleep 3
+systemctl --no-pager --lines=0 status visao-detector visao-web | grep -E '●|Active:'
+IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+echo "pronto: http://${IP:-<ip-do-servidor>}:8080"

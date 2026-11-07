@@ -10,3 +10,8 @@ downloads/
 /var/log/
 tmp/
 .DS_Store
+
+# Visão: configuração com senha da câmera e caches Python
+visao/config.toml
+__pycache__/
+*.pyc
