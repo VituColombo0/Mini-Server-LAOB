@@ -34,7 +34,7 @@ done
 echo "[4b/7] go2rtc (áudio para o alto-falante da câmera)"
 mkdir -p "$BASE/bin"
 if [ ! -x "$BASE/bin/go2rtc" ]; then
-  GO2RTC_VER="${GO2RTC_VER:-v1.9.9}"
+  GO2RTC_VER="${GO2RTC_VER:-v1.9.15}"
   curl -fsSL --retry 5 -o "$BASE/bin/go2rtc" \
     "https://github.com/AlexxIT/go2rtc/releases/download/$GO2RTC_VER/go2rtc_linux_arm"
   chmod 755 "$BASE/bin/go2rtc"
