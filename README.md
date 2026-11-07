@@ -1,11 +1,11 @@
 # Mini-Server: MXQ Pro 4K 5G Headless Server
 
-Transformação de TV Box baseadas em SoC ARM (Rockchip RK322x, Amlogic S905x ou Allwinner H3) em servidor doméstico autônomo 24/7 com consumo reduzido (~3W), bloqueador de anúncios em rede, NAS, VPN e orquestração de contêineres Docker.
+Transformação de TV Box baseadas em SoC ARM (Rockchip RK322x, Amlogic S905x ou Allwinner H3) em servidor doméstico autônomo 24/7 com consumo reduzido (~3W): bloqueador de anúncios em rede, NAS, VPN e **Visão**, um sistema de identificação por reconhecimento facial com uma câmera Tapo C200, que roda inteiro na TV Box, sem nuvem.
 
-[![OS: Armbian Minimal](https://img.shields.io/badge/OS-Armbian%20Debian%20Bookworm-red.svg)](https://www.armbian.com/)
+[![OS: Armbian Minimal](https://img.shields.io/badge/OS-Armbian%20Debian%20Trixie-red.svg)](https://www.armbian.com/)
 [![Architecture: ARM](https://img.shields.io/badge/Architecture-ARMv7%20%2F%20ARM64-blue.svg)](https://github.com/VituColombo0/Mini-Server)
 [![DNS: AdGuard Home](https://img.shields.io/badge/DNS-AdGuard%20Home-success.svg)](https://adguard.com/adguard-home.html)
-[![Containers: Docker](https://img.shields.io/badge/Containers-Docker%20%2B%20Portainer-2496ED.svg)](https://www.docker.com/)
+[![Visão: OpenCV](https://img.shields.io/badge/Vis%C3%A3o-OpenCV%20YuNet%20%2B%20SFace-5C3EE8.svg)](visao/README.md)
 [![Mesh VPN: Tailscale](https://img.shields.io/badge/VPN-Tailscale-black.svg)](https://tailscale.com/)
 
 ---
@@ -44,8 +44,15 @@ O sistema disponibiliza uma suíte integrada de utilitários de infraestrutura l
 │  [ Samba / SMB :445 ]    ── Compartilhamento de rede local  │
 │  [ SSH Direto :22 ]      ── Acesso seguro por chave Ed25519 │
 │  [ Tailscale VPN ]       ── Conexão remota externa segura   │
+├─────────────────────────────────────────────────────────────┤
+│  Visão (reconhecimento facial — câmera Tapo C200)           │
+│  [ visao-web :8080 ]     ── Painel: hoje, relatório, membros│
+│  [ visao-detector ]      ── Detecção, identificação, clipes │
+│  [ visao-go2rtc ]        ── Áudio para a câmera (só local)  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+> O Docker vem instalado pelo setup, mas fica **desativado** (sem contêineres) para liberar ~100 MB de RAM e CPU para o Visão. Para religar: `sudo systemctl enable --now docker`.
 
 ### Otimizações de Kernel e Resiliência de Hardware
 
@@ -55,7 +62,8 @@ A configuração inclui ajustes específicos para contornar limitações de mem�
 - **Governor de CPU Térmico:** Configuração dos governors `schedutil` ou `ondemand` para adequação dinâmica de clock, assegurando operação estável sem superaquecimento mesmo em gabinetes passivos sem cooler.
 - **Hardware Watchdog:** Módulo de kernel ativo para forçar reinicialização automática do hardware caso ocorra congelamento de kernel ou microquedas de tensão.
 - **Prevenção de Ataques (Fail2ban):** Bloqueio progressivo de endereços IP após tentativas repetidas de força bruta no SSH e nos serviços HTTP.
-- **Manutenção Automatizada:** Rotinas no `cron` para limpeza diária de imagens órfãs do Docker e descarte de cache de pacotes APT.
+- **Manutenção Automatizada:** Rotinas no `cron` para descarte de cache de pacotes APT; o Visão faz backup noturno do próprio banco e apaga histórico com mais de 7 dias.
+- **Proteção Térmica do Visão:** acima de 78 °C a análise de vídeo fica mais espaçada (85 °C: bem mais), para a TV Box não superaquecer nem travar.
 
 ---
 
@@ -77,11 +85,8 @@ git clone https://github.com/VituColombo0/Mini-Server.git
 cd Mini-Server
 sudo chmod +x *.sh
 
-# Com credenciais padrão (admin / SENHA_REMOVIDA):
-sudo ./prepare_sd_card.sh /media/$USER/armbi_root
-
-# Ou definindo usuário e senha customizados:
-sudo ./prepare_sd_card.sh /media/$USER/armbi_root usuario senha123
+# Definindo usuário e senha (recomendado: use uma senha própria e forte):
+sudo ./prepare_sd_card.sh /media/$USER/armbi_root usuario SENHA_FORTE
 ```
 *(Substitua `/media/$USER/armbi_root` pelo ponto de montagem real da partição no seu sistema).*
 
@@ -102,20 +107,21 @@ Ao término do provisionamento, todos os serviços estarão acessíveis na rede 
 | Serviço | Porta / URL | Usuário Padrão | Finalidade |
 | :--- | :--- | :--- | :--- |
 | **AdGuard Home** | `http://<IP>:3000` | Definido no 1º login | Bloqueador de anúncios e filtros de rede |
-| **FileBrowser Web** | `http://<IP>:8082` | `vimora` / `SENHA_REMOVIDA` | Nuvem pessoal de arquivos e mídias USB |
-| **Samba (NAS)** | `\\<IP>\Compartilhado` | `vimora` / `SENHA_REMOVIDA` | Compartilhamento SMB para Windows/Mac/Linux |
+| **FileBrowser Web** | `http://<IP>:8082` | definido na instalação | Nuvem pessoal de arquivos e mídias USB |
+| **Samba (NAS)** | `\\<IP>\Compartilhado` | definido na instalação | Compartilhamento SMB para Windows/Mac/Linux |
+| **Visão (painel)** | `http://<IP>:8080` | definido com `visao-cli senha` | Quem foi identificado, relatórios, membros, revisão |
 
 ### Acesso Administrativo e Manutenção Remota
 
 | Recurso | Método de Acesso | Credenciais | Operação |
 | :--- | :--- | :--- | :--- |
-| **Editor de Arquivos Root** | `http://<IP>:8082` | `Lirool` / `SENHA_REMOVIDA` | Edição de arquivos do sistema (`/etc`, `/boot`) |
-| **Acesso SSH (Senha)** | `ssh Lirool@<IP>` (porta 22) | `Lirool` / `SENHA_REMOVIDA` | Sessão remota com permissão sudo total |
+| **Editor de Arquivos Root** | `http://<IP>:8082` | usuário administrador | Edição de arquivos do sistema (`/etc`, `/boot`) |
+| **Acesso SSH (Senha)** | `ssh <usuario>@<IP>` (porta 22) | usuário administrador | Sessão remota com permissão sudo total |
 | **Acesso SSH (Chave)** | `ssh miniserver` (porta 22) | Chave `id_ed25519` autorizada | Login automático direto sem senha |
 | **Atualização OTA** | Comando `mxq-update` | Terminal / SSH | Sincronização direta com o repositório GitHub |
 | **Rede Remota (VPN)** | `sudo tailscale up --accept-dns=false` | Conta Pessoal Tailscale | Acesso de fora da LAN sem expor portas |
 
-> Um registro completo com links e senhas é gerado no próprio dispositivo em `/root/server-credentials.txt` com restrição de permissão `chmod 600`.
+> As senhas **não ficam neste repositório**. Um registro completo com links e senhas é gerado no próprio dispositivo em `/root/server-credentials.txt` (`chmod 600`). As credenciais da câmera ficam em `/opt/visao/config.toml` (`root:visao`, `640`).
 
 ### 🔑 Configuração do Acesso SSH por Chaves e Tailscale
 
@@ -131,6 +137,22 @@ sudo ./scripts/setup_ssh.sh
 # 3. (Opcional, recomendado) Ativar acesso remoto seguro via Tailscale VPN
 sudo tailscale up --ssh
 ```
+
+---
+
+## Visão: identificação por reconhecimento facial
+
+Módulo em [`visao/`](visao/README.md) que usa uma câmera **Tapo C200** (RTSP + ONVIF) para registrar
+**quem foi identificado no laboratório e quando**, com foto e vídeo. Tudo roda na própria TV Box.
+
+- **Detecção e reconhecimento:** OpenCV (YuNet + SFace), com a wheel ARMv7 com NEON do piwheels. O pacote do Debian não tem NEON e é 2–4× mais lento.
+- **Gatilho barato:** a análise contínua só liga com movimento (evento ONVIF da câmera, pan/tilt girando ou mudança na imagem); parado, faz uma varredura a cada 20 s.
+- **Menos erros:** confirmação por duas leituras, aprendizado contínuo de amostras e botão "corrigir" que desfaz o que foi aprendido errado.
+- **Pessoas sem cadastro:** alerta "desconhecido" e página de revisão, sempre com foto e vídeo de ~30 s em 1080p.
+- **Cumprimento falado:** "Bom dia, Nome!" na primeira identificação do dia, com voz offline (espeak-ng + MBROLA pt-BR), pela câmera (go2rtc) ou pela saída de som da TV Box.
+- **Privacidade:** histórico, fotos e vídeos são apagados após 7 dias; só ficam as amostras de cadastro dos membros.
+
+Instalação: `sudo bash visao/deploy/install.sh`. Detalhes, configuração e linha de comando (`visao-cli`) estão em [`visao/README.md`](visao/README.md).
 
 ---
 
@@ -163,7 +185,13 @@ Medições práticas em operação estável sob o Armbian Minimal:
 | **FileBrowser Web** | ~15 MB | < 0.2% |
 | **Serviço Samba (SMB)** | ~20 MB | < 0.5% |
 | **Tailscale / SSH** | ~20 MB | < 0.2% |
-| **Total Estimado** | **~150 MB de RAM** | **< 2% de CPU** |
+| **Visão: detector** (Python + OpenCV) | ~150 MB | ~6% (parado), até ~60% com movimento |
+| **Visão: decodificação do vídeo 720p** (ffmpeg) | ~55 MB | ~23% (≈ 1 núcleo de 4) |
+| **Visão: gravação em anel 1080p** (ffmpeg, cópia) | ~40 MB | ~2% |
+| **Visão: painel web + go2rtc** | ~70 MB | < 1% |
+| **Total Estimado** | **~500 MB de RAM** | **~30% de CPU parado** |
+
+> Medido na unidade atual (RK322x, 1 GB). Com o Visão parado, a TV Box fica ~68% ociosa e a ~66 °C.
 
 ---
 
@@ -186,6 +214,10 @@ Mini-Server/
 ├── prepare_sd_card.sh           # Utilitário para gravação e injeção do bootstrap no host
 ├── setup_mxq_server.sh          # Script mestre de provisionamento de serviços e kernel
 ├── systemd/                     # Unidades de serviço para inicialização
+├── visao/                       # Reconhecimento facial com a Tapo C200 (ver visao/README.md)
+│   ├── visao/                   # Código Python (detector, web, CLI, câmera, rostos)
+│   ├── deploy/                  # install.sh e unidades systemd do Visão
+│   └── config.example.toml      # Modelo de configuração (a real fica fora do git)
 ├── docs/                        # Documentações adicionais de suporte e pinouts
 └── README.md                    # Documentação técnica do projeto
 ```
