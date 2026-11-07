@@ -29,6 +29,7 @@ from .enroll import member_dir, process_pending
 from .faces import FaceEngine, Gallery
 from .notify import Notifier
 from .presence import Presence
+from .speaker import Speaker
 from .tracker import Tracker
 
 log = logging.getLogger("visao.detector")
@@ -89,6 +90,9 @@ class Detector:
         self.recent_unknown = deque(maxlen=50)  # (ts, embedding) de alertas já enviados
         self.recent_uncertain = deque(maxlen=50)
         self.pending_accepts = {}  # member_id -> ts da última leitura aceita ainda sem confirmação
+        self.speaker = Speaker(cfg.greeting, os.path.join(self.run_dir, "tts"))
+        self.speaker.start()
+        self.greeted = {}
         self.prev_small, self.sw_motion_ts = None, 0.0
         self.last_scan = self.last_live = self.last_status = 0.0
         self.cycle_ms, self.last_faces = 0.0, 0
@@ -290,6 +294,7 @@ class Detector:
             new = self.presence.seen(t.member_id, ts, s1)
             if new:
                 self.on_entry(new, t, frame, aligned, ts, s1, emb)
+            self.maybe_greet(t.member_id, ts)
             self.maybe_auto_enrich(t.member_id, emb, aligned, q, s1, ts)
             log.debug("track %d = %s (%.2f)", t.id, self.gallery.names.get(t.member_id), s1)
         elif t.member_id is not None and s1 < dc.unknown:
@@ -297,6 +302,21 @@ class Detector:
             t.member_id, t.member_score = None, 0.0
         elif t.member_id is None and len(self.gallery) and s1 < dc.unknown:
             self.low_reading(t, emb, aligned, frame, ts, s1, m1)
+
+    def maybe_greet(self, member_id, ts):
+        """Cumprimenta o membro na primeira identificação do dia (vale também após reiniciar)."""
+        if not self.speaker.enabled:
+            return
+        today = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        key = f"greeted:{member_id}"
+        if self.greeted.get(member_id) == today or db.get_meta(self.con, key) == today:
+            self.greeted[member_id] = today
+            return
+        self.greeted[member_id] = today
+        self.con.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) "
+                         "DO UPDATE SET value=excluded.value", (key, today))
+        text = self.speaker.greet(self.gallery.names.get(member_id, ""))
+        log.info("cumprimento enfileirado: %s", text)
 
     def confirmed(self, t, m1, s1, ts):
         """Aceita a identificação com certeza alta, ou quando duas leituras concordam."""
@@ -515,6 +535,8 @@ class Detector:
             "gallery_members": len(set(self.gallery.labels.tolist())),
             "capture": ({"member_id": self.capture["member_id"], "captured": self.capture["captured"],
                          "target": self.capture["target"]} if self.capture else None),
+            "speaker": {"enabled": self.speaker.enabled, "spoken": self.speaker.spoken,
+                        "last_ok": self.speaker.last_ok, "last_error": self.speaker.last_error},
             "cpu_temp": cpu_temp(),
             "load": round(os.getloadavg()[0], 2),
         }

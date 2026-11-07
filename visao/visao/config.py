@@ -56,6 +56,19 @@ DEFAULTS = {
         "host": "0.0.0.0",
         "port": 8080,
     },
+    "greeting": {
+        "enabled": True,
+        "message": "{saudacao}, {nome}!",   # {saudacao} = Bom dia / Boa tarde / Boa noite
+        "once_per": "dia",                   # "dia" = só na primeira vez que vê a pessoa no dia
+        "voice": "mb-br3",                   # espeak-ng: mb-br1, mb-br3, mb-br4 ou pt-br
+        "speed": 145,
+        "volume": 180,
+        "go2rtc_url": "http://127.0.0.1:1984",
+        "stream": "camera",
+        # O alto-falante da Tapo só aceita áudio pelo protocolo próprio da TP-Link, que pede a
+        # senha da CONTA TAPO (a do app/nuvem), não a "Conta da câmera" usada no RTSP.
+        "tapo_cloud_password": "",
+    },
     "telegram": {
         "token": "",
         "chat_id": "",

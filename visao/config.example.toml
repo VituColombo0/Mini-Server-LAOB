@@ -30,6 +30,15 @@ record_clips = true        # grava clipes de ~30 s em 1080p nas entradas e alert
 host = "0.0.0.0"
 port = 8080
 
+[greeting]
+# Cumprimento falado pelo alto-falante da câmera na primeira vez que vê o membro no dia.
+enabled = true
+message = "{saudacao}, {nome}!"   # {saudacao} = Bom dia / Boa tarde / Boa noite
+voice = "mb-br3"                  # mb-br1, mb-br3, mb-br4 ou pt-br
+# Senha da CONTA TAPO (a do app), necessária para mandar áudio para a câmera.
+# Depois de preencher: visao-cli go2rtc-config && systemctl restart visao-go2rtc
+tapo_cloud_password = ""
+
 [telegram]
 # Opcional: crie um bot com o @BotFather e coloque o token e o chat_id.
 token = ""

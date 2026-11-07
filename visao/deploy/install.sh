@@ -12,7 +12,8 @@ ZOO=https://github.com/opencv/opencv_zoo/raw/main/models
 
 echo "[1/7] pacotes do sistema"
 apt-get install -y --no-install-recommends ffmpeg python3-venv rsync curl \
-  libopenblas0-pthread libwebpdemux2 libopenexr-3-1-30 >/dev/null
+  libopenblas0-pthread libwebpdemux2 libopenexr-3-1-30 \
+  espeak-ng mbrola mbrola-br1 mbrola-br3 mbrola-br4 >/dev/null
 
 echo "[2/7] usuário de serviço 'visao'"
 id visao >/dev/null 2>&1 || useradd --system --home-dir "$BASE" --no-create-home --shell /usr/sbin/nologin visao
@@ -29,6 +30,15 @@ for f in face_detection_yunet/face_detection_yunet_2023mar.onnx \
   dst="$BASE/models/$(basename "$f")"
   [ -s "$dst" ] || curl -fsSL --retry 5 -o "$dst" "$ZOO/$f"
 done
+
+echo "[4b/7] go2rtc (áudio para o alto-falante da câmera)"
+mkdir -p "$BASE/bin"
+if [ ! -x "$BASE/bin/go2rtc" ]; then
+  GO2RTC_VER="${GO2RTC_VER:-v1.9.9}"
+  curl -fsSL --retry 5 -o "$BASE/bin/go2rtc" \
+    "https://github.com/AlexxIT/go2rtc/releases/download/$GO2RTC_VER/go2rtc_linux_arm"
+  chmod 755 "$BASE/bin/go2rtc"
+fi
 
 echo "[5/7] código"
 rsync -a --delete --exclude '__pycache__' "$SRC/visao/" "$BASE/app/visao/"
@@ -49,12 +59,16 @@ if [ ! -f "$BASE/data/web_auth.json" ]; then
   echo "  >> senha inicial da web salva em /root/visao-senha-inicial.txt"
 fi
 
+visao-cli go2rtc-config --saida "$BASE/go2rtc.yaml"
+chown root:visao "$BASE/go2rtc.yaml"; chmod 640 "$BASE/go2rtc.yaml"
+
 echo "[7/7] serviços"
-install -m 644 "$SRC/deploy/visao-detector.service" "$SRC/deploy/visao-web.service" /etc/systemd/system/
+install -m 644 "$SRC/deploy/visao-detector.service" "$SRC/deploy/visao-web.service" \
+  "$SRC/deploy/visao-go2rtc.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable visao-detector visao-web >/dev/null 2>&1
-systemctl restart visao-detector visao-web
+systemctl enable visao-go2rtc visao-detector visao-web >/dev/null 2>&1
+systemctl restart visao-go2rtc visao-detector visao-web
 sleep 3
-systemctl --no-pager --lines=0 status visao-detector visao-web | grep -E '●|Active:'
+systemctl --no-pager --lines=0 status visao-go2rtc visao-detector visao-web | grep -E '●|Active:'
 IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
 echo "pronto: http://${IP:-<ip-do-servidor>}:8080"

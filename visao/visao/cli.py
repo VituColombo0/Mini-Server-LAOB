@@ -158,8 +158,47 @@ def cmd_senha(a):
     return 0
 
 
+def cmd_falar(a):
+    """Testa o alto-falante da câmera com uma frase."""
+    from .speaker import Speaker
+    sp = Speaker(cfg.greeting, os.path.join(cfg.storage.runtime_dir, "tts"))
+    path = sp.synth(a.texto)
+    print(f"áudio gerado: {path}")
+    try:
+        sp.play(path)
+    except Exception as e:
+        print(f"falhou ao tocar na câmera: {type(e).__name__}: {e}")
+        return 1
+    print("enviado para a câmera")
+    return 0
+
+
+def cmd_go2rtc_config(a):
+    """Gera a configuração do go2rtc (stream da câmera com áudio de duas vias)."""
+    from urllib.parse import quote
+    cam, g = cfg.camera, cfg.greeting
+    if g.tapo_cloud_password:
+        src = f"tapo://admin:{quote(g.tapo_cloud_password, safe='')}@{cam.host}"
+    else:
+        src = f"rtsp://{quote(cam.user, safe='')}:{quote(cam.password, safe='')}@{cam.host}:{cam.rtsp_port}/{cam.sub_stream}"
+    text = ("# gerado por: visao-cli go2rtc-config (não edite; mude o /opt/visao/config.toml)\n"
+            "api:\n  listen: \"127.0.0.1:1984\"\n"
+            "rtsp:\n  listen: \"\"\n"
+            "webrtc:\n  listen: \"\"\n"
+            "log:\n  level: warn\n"
+            f"streams:\n  {g.stream}:\n    - \"{src}\"\n")
+    out = a.saida
+    tmp = out + ".tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w") as f:
+        f.write(text)
+    os.replace(tmp, out)
+    print(f"{out} gerado ({'tapo, com áudio de duas vias' if g.tapo_cloud_password else 'rtsp, sem senha da conta Tapo: só vídeo'})")
+    return 0
+
+
 def main():
-    run_as_service_user()
+    if sys.argv[1:2] != ["go2rtc-config"]:
+        run_as_service_user()
     p = argparse.ArgumentParser(prog="visao-cli", description="Visão — presença por reconhecimento facial")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status").set_defaults(fn=cmd_status)
@@ -175,6 +214,12 @@ def main():
     sp.add_argument("--stdin", action="store_true")
     sp.add_argument("--usuario", help="nome de usuário do login (padrão: mantém o atual)")
     sp.set_defaults(fn=cmd_senha)
+    sp = sub.add_parser("go2rtc-config")
+    sp.add_argument("--saida", default="/opt/visao/go2rtc.yaml")
+    sp.set_defaults(fn=cmd_go2rtc_config)
+    sp = sub.add_parser("falar")
+    sp.add_argument("texto")
+    sp.set_defaults(fn=cmd_falar)
     a = p.parse_args()
     sys.exit(a.fn(a))
 
