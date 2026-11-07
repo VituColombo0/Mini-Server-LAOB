@@ -20,12 +20,9 @@ O sistema disponibiliza uma suíte integrada de utilitários de infraestrutura l
 │             Armbian Minimal (Linux Kernel LTS)              │
 ├─────────────────────────────────────────────────────────────┤
 │  [ AdGuard Home :3000 ]  ── Bloqueio de anúncios por DNS    │
-│  [ Dashboard Web :8080 ] ── Painel unificado (Nginx)        │
 │  [ FileBrowser :8082 ]   ── Gerenciador web de arquivos     │
 │  [ Samba / SMB :445 ]    ── Compartilhamento de rede local  │
-│  [ Uptime Kuma :3001 ]   ── Monitoramento de integridade    │
-│  [ Portainer :9000 ]     ── Painel de controle de Docker    │
-│  [ Web Terminal :7681 ]  ── Console interativo (ttyd)       │
+│  [ SSH Direto :22 ]      ── Acesso seguro por chave Ed25519 │
 │  [ Tailscale VPN ]       ── Conexão remota externa segura   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -84,23 +81,19 @@ Ao término do provisionamento, todos os serviços estarão acessíveis na rede 
 
 | Serviço | Porta / URL | Usuário Padrão | Finalidade |
 | :--- | :--- | :--- | :--- |
-| **Painel Geral** | `http://<IP>:8080` | `vimora` / `SENHA_REMOVIDA` | Dashboard unificado de navegação |
 | **AdGuard Home** | `http://<IP>:3000` | Definido no 1º login | Bloqueador de anúncios e filtros de rede |
 | **FileBrowser Web** | `http://<IP>:8082` | `vimora` / `SENHA_REMOVIDA` | Nuvem pessoal de arquivos e mídias USB |
-| **Uptime Kuma** | `http://<IP>:3001` | Definido no 1º login | Monitoramento de serviços e alertas |
-| **Portainer** | `http://<IP>:9000` | Definido no 1º login | Gestão de contêineres Docker |
 | **Samba (NAS)** | `\\<IP>\Compartilhado` | `vimora` / `SENHA_REMOVIDA` | Compartilhamento SMB para Windows/Mac/Linux |
 
 ### Acesso Administrativo e Manutenção Remota
 
 | Recurso | Método de Acesso | Credenciais | Operação |
 | :--- | :--- | :--- | :--- |
-| **Terminal Web (ttyd)** | `http://<IP>:7681` | `Lirool` / `SENHA_REMOVIDA` | Shell Bash interativo diretamente no navegador |
 | **Editor de Arquivos Root** | `http://<IP>:8082` | `Lirool` / `SENHA_REMOVIDA` | Edição de arquivos do sistema (`/etc`, `/boot`) |
 | **Acesso SSH (Senha)** | `ssh Lirool@<IP>` (porta 22) | `Lirool` / `SENHA_REMOVIDA` | Sessão remota com permissão sudo total |
 | **Acesso SSH (Chave)** | `ssh miniserver` (porta 22) | Chave `id_ed25519` autorizada | Login automático direto sem senha |
 | **Atualização OTA** | Comando `mxq-update` | Terminal / SSH | Sincronização direta com o repositório GitHub |
-| **Rede Remota (VPN)** | `sudo tailscale up --ssh` | Conta Pessoal Tailscale | Acesso de fora da LAN sem abrir portas no roteador |
+| **Rede Remota (VPN)** | `sudo tailscale up --accept-dns=false` | Conta Pessoal Tailscale | Acesso de fora da LAN sem expor portas |
 
 > Um registro completo com links e senhas é gerado no próprio dispositivo em `/root/server-credentials.txt` com restrição de permissão `chmod 600`.
 
@@ -149,11 +142,8 @@ Medições práticas em operação estável sob o Armbian Minimal:
 | **AdGuard Home** | ~35 MB | < 0.5% |
 | **FileBrowser Web** | ~15 MB | < 0.2% |
 | **Serviço Samba (SMB)** | ~20 MB | < 0.5% |
-| **Nginx Dashboard** | ~8 MB | < 0.1% |
-| **Fail2ban** | ~12 MB | < 0.2% |
-| **Uptime Kuma (Docker)** | ~60 MB | ~1.0% |
-| **Portainer (Docker)** | ~35 MB | < 0.5% |
-| **Total Estimado** | **~245 MB de RAM** | **~3% a 5% de CPU** |
+| **Tailscale / SSH** | ~20 MB | < 0.2% |
+| **Total Estimado** | **~150 MB de RAM** | **< 2% de CPU** |
 
 ---
 

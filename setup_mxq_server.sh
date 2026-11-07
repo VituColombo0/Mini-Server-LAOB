@@ -2,20 +2,16 @@
 # ============================================================================
 #  MXQ Pro 4K 5G — Mini Servidor Residencial Otimizado & Seguro
 #  
-#  Serviços, Otimizações e Acesso Remoto Master Inclusos:
+#  Serviços Essenciais (Setup Minimalista):
 #    1. Otimizações ARM (ZRAM lz4, Proteção Flash/SD noatime, Watchdog, CPU Governor)
 #    2. Segurança Reforçada (Firewall UFW, Fail2ban contra força bruta, SSH protegido)
 #    3. Usuário Master ROOT "Lirool" com sudo e poderes totais de reescrita remota
-#    4. Console Terminal Web Master (ttyd na porta 7681 — terminal root no navegador)
-#    5. FileBrowser Web Master (Editor de arquivos do sistema raiz na porta 8082)
-#    6. Ferramenta de Atualização Remota OTA (/usr/local/bin/mxq-update)
-#    7. AdGuard Home (Bloqueador de anúncios DNS protegido por senha na porta 3000)
-#    8. Servidor Samba Autenticado (Compartilhamento de arquivos na rede porta 445)
-#    9. Dashboard Nginx Protegido (Autenticação HTTP Basic Auth na porta 8080)
-#   10. Docker + Portainer CE (Gerenciamento de containers na porta 9000)
-#   11. Uptime Kuma (Monitoramento com alertas na porta 3001)
-#   12. Tailscale VPN (Acesso remoto seguro de qualquer lugar do mundo)
-#   13. Manutenção Automática (Cron diário para limpeza de cache e Docker)
+#    4. FileBrowser Web (Gerenciador de arquivos na porta 8082)
+#    5. Ferramenta de Atualização Remota OTA (/usr/local/bin/mxq-update)
+#    6. AdGuard Home (Bloqueador de anúncios DNS na porta 3000)
+#    7. Servidor Samba Autenticado (Compartilhamento de arquivos na rede porta 445)
+#    8. Tailscale VPN (Acesso remoto seguro de qualquer lugar do mundo)
+#    9. Manutenção Automática (Cron diário para limpeza de cache)
 # ============================================================================
 
 set -euo pipefail
@@ -38,11 +34,7 @@ MASTER_PASS="${MASTER_PASS:-SENHA_REMOVIDA}"
 
 # ── Portas dos Serviços ────────────────────────────────────────────────────
 ADGUARD_PORT=3000
-UPTIME_KUMA_PORT=3001
-PORTAINER_PORT=9000
-NGINX_PORT=8080
 FILEBROWSER_PORT=8082
-WEB_TERMINAL_PORT=7681
 
 # ── Diretórios ─────────────────────────────────────────────────────────────
 SAMBA_SHARE_PATH="/srv/shared"
@@ -451,17 +443,21 @@ setup_adguard() {
     local AGH_URL="https://static.adtidy.org/adguardhome/release/AdGuardHome_linux_${ARCH}.tar.gz"
 
     log "Baixando AdGuard Home para arquitetura ${ARCH}..."
-    cd /tmp
+    mkdir -p /opt/AdGuardHome /tmp/agh
+    cd /tmp/agh
     wget -q "${AGH_URL}" -O AdGuardHome.tar.gz
 
-    log "Extraindo e instalando..."
+    log "Extraindo e instalando em /opt/AdGuardHome..."
     tar -xzf AdGuardHome.tar.gz
-    cd AdGuardHome
+    cp -r AdGuardHome/* /opt/AdGuardHome/
+    cd /opt/AdGuardHome
+    ./AdGuardHome -s uninstall 2>/dev/null || true
     ./AdGuardHome -s install
-    sleep 3
+    sleep 2
 
-    rm -rf /tmp/AdGuardHome*
-    log "✅ AdGuard Home instalado com sucesso na porta ${ADGUARD_PORT}!"
+    rm -rf /tmp/agh
+    systemctl restart AdGuardHome
+    log "✅ AdGuard Home instalado com sucesso em /opt/AdGuardHome na porta ${ADGUARD_PORT}!"
 }
 
 # ============================================================================
@@ -854,8 +850,8 @@ setup_tailscale() {
     if curl -fsSL https://tailscale.com/install.sh | sh; then
         systemctl enable --now tailscaled 2>/dev/null || true
         log "✅ Tailscale instalado e ativado!"
-        log "👉 Para vincular à sua conta com SSH remoto ativado, execute:"
-        log "   sudo tailscale up --ssh"
+        log "👉 Para vincular à sua conta (sem interceptação de SSH via navegador), execute:"
+        log "   sudo tailscale up --accept-dns=false"
     else
         warn "Tailscale não pôde ser instalado. Acesso remoto VPN não disponível."
     fi
@@ -901,29 +897,24 @@ Nome na Rede Local:    http://mxq-server.local:8080
   Senha Master:        ${MASTER_PASS}
   Privilégios:         Sudo Total, Reescrita do Sistema, Console Web
 
-  👉 Console Terminal Web:  http://${IP}:${WEB_TERMINAL_PORT}
   👉 Editor de Arquivos:    http://${IP}:${FILEBROWSER_PORT} (Acesso a "/")
   👉 Acesso SSH:            ssh ${MASTER_USER}@${IP} (Chave SSH autorizada ou Senha: ${MASTER_PASS})
-  👉 Acesso SSH Direto:     ssh miniserver (a partir do PC do desenvolvedor)
-  👉 VPN Tailscale:         sudo tailscale up --ssh (para acesso de fora de casa)
+  👉 Acesso SSH Direto:     ssh miniserver (a partir do PC configurado)
+  👉 VPN Tailscale:         sudo tailscale up --accept-dns=false (para acesso de fora de casa)
 
 --------------------------------------------------------------------
 🏠 CREDENCIAIS PADRÃO DA CASA / VISITANTES:
 --------------------------------------------------------------------
   Usuário:             ${SERVER_USER}
   Senha:               ${SERVER_PASS}
-  Acesso:              Samba, Arquivos Compartilhados e Dashboard
+  Acesso:              Samba e Arquivos Compartilhados
 
 --------------------------------------------------------------------
 🌐 PAINEL DE SERVIÇOS:
 --------------------------------------------------------------------
-  1. ⚡ Dashboard Central:   http://${IP}:${NGINX_PORT}
-  2. 🛡️ AdGuard Home:        http://${IP}:${ADGUARD_PORT}
-  3. 📂 Arquivos Web:        http://${IP}:${FILEBROWSER_PORT}
-  4. 📁 Rede Samba (SMB):    \\\\${IP}\\Compartilhado
-  5. 📊 Uptime Kuma:         http://${IP}:${UPTIME_KUMA_PORT}
-  6. 🐳 Portainer Docker:    http://${IP}:${PORTAINER_PORT}
-  7. 💻 Console Master:      http://${IP}:${WEB_TERMINAL_PORT}
+  1. 🛡️ AdGuard Home:        http://${IP}:${ADGUARD_PORT}
+  2. 📂 Arquivos Web:        http://${IP}:${FILEBROWSER_PORT}
+  3. 📁 Rede Samba (SMB):    \\\\${IP}\\Compartilhado
 
 --------------------------------------------------------------------
 🔄 ATUALIZAÇÃO REMOTA OVER-THE-AIR:
@@ -961,13 +952,13 @@ main() {
 
     setup_optimizations
     setup_security_and_master
-    setup_web_terminal
+    # setup_web_terminal (removido para economizar recursos)
     setup_adguard
     setup_samba
     setup_usb_automount
     setup_filebrowser
-    setup_nginx
-    setup_docker
+    # setup_nginx (removido para economizar recursos)
+    # setup_docker (removido para economizar recursos)
     setup_tailscale
     setup_maintenance_cron
     save_credentials_and_summary
