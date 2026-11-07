@@ -66,6 +66,8 @@ DEFAULTS = {
         "voice": "mb-br3",                   # espeak-ng: mb-br1, mb-br3, mb-br4 ou pt-br
         "speed": 145,
         "volume": 180,
+        "output": "auto",                    # local (TV Box) | camera (Tapo) | auto (câmera, senão local)
+        "local_device": "plughw:CARD=analog,DEV=0",  # conector AV; HDMI: plughw:CARD=HDMI,DEV=0
         "go2rtc_url": "http://127.0.0.1:1984",
         "stream": "camera",
         # O alto-falante da Tapo só aceita áudio pelo protocolo próprio da TP-Link, que pede a

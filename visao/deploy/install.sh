@@ -13,10 +13,11 @@ ZOO=https://github.com/opencv/opencv_zoo/raw/main/models
 echo "[1/7] pacotes do sistema"
 apt-get install -y --no-install-recommends ffmpeg python3-venv rsync curl \
   libopenblas0-pthread libwebpdemux2 libopenexr-3-1-30 \
-  espeak-ng mbrola mbrola-br1 mbrola-br3 mbrola-br4 >/dev/null
+  espeak-ng mbrola mbrola-br1 mbrola-br3 mbrola-br4 alsa-utils >/dev/null
 
 echo "[2/7] usuário de serviço 'visao'"
 id visao >/dev/null 2>&1 || useradd --system --home-dir "$BASE" --no-create-home --shell /usr/sbin/nologin visao
+usermod -aG audio visao   # tocar o cumprimento na saída de som da TV Box
 mkdir -p "$BASE"/{app,data,models}
 
 echo "[3/7] ambiente Python (pode demorar na primeira vez)"

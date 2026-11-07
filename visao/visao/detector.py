@@ -658,7 +658,8 @@ class Detector:
             "capture": ({"member_id": self.capture["member_id"], "captured": self.capture["captured"],
                          "target": self.capture["target"]} if self.capture else None),
             "speaker": {"enabled": self.speaker.enabled, "spoken": self.speaker.spoken,
-                        "last_ok": self.speaker.last_ok, "last_error": self.speaker.last_error},
+                        "last_ok": self.speaker.last_ok, "last_error": self.speaker.last_error,
+                        "last_route": self.speaker.last_route, "output": self.speaker.output},
             "cpu_temp": cpu_temp(),
             "load": round(os.getloadavg()[0], 2),
         }

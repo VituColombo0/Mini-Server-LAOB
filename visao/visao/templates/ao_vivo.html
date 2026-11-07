@@ -48,7 +48,7 @@ async function tick() {
       $('onvif').textContent = `${s.onvif} · ${s.onvif_events} recebidos`;
       $('rec').textContent = s.recorder_online ? 'ativa' : 'parada';
       const sp = s.speaker || {};
-      $('speaker').textContent = sp.enabled ? (sp.last_error ? 'erro: ' + sp.last_error : `ok · ${sp.spoken} falas`) : (sp.last_error || 'desligado');
+      $('speaker').textContent = sp.enabled ? (sp.last_error ? 'erro: ' + sp.last_error : `ok · ${sp.spoken} falas${sp.last_route ? ' · última pela ' + sp.last_route : ''}`) : (sp.last_error || 'desligado');
       $('cycle').textContent = s.cycle_ms ? (s.cycle_ms / 1000).toFixed(1) + ' s' : '—';
       $('gallery').textContent = `${s.gallery_members} membros · ${s.gallery_samples} amostras`;
       $('temp').textContent = `${s.cpu_temp ?? '—'} °C · ${s.load}`;

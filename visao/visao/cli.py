@@ -163,13 +163,13 @@ def cmd_falar(a):
     from .speaker import Speaker
     sp = Speaker(cfg.greeting, os.path.join(cfg.storage.runtime_dir, "tts"))
     path = sp.synth(a.texto)
-    print(f"áudio gerado: {path}")
+    print(f"áudio gerado: {path} (saída configurada: {sp.output})")
     try:
-        sp.play(path)
+        route = sp.play(path)
     except Exception as e:
-        print(f"falhou ao tocar na câmera: {type(e).__name__}: {e}")
+        print(f"falhou ao tocar: {type(e).__name__}: {e}")
         return 1
-    print("enviado para a câmera")
+    print(f"tocado pela {route}")
     return 0
 
 
