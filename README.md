@@ -10,6 +10,26 @@ Transformação de TV Box baseadas em SoC ARM (Rockchip RK322x, Amlogic S905x ou
 
 ---
 
+## Especificações do Hardware (Unidade Atual)
+
+Configuração extraída diretamente do hardware em produção:
+
+| Componente | Especificação |
+| :--- | :--- |
+| **Dispositivo** | TV Box MXQ Pro 4K 5G (Placa: Generic RK322x Board) |
+| **SoC / Processador** | Rockchip RK322x — Quad-Core ARM Cortex-A7 (ARMv7l 32-bit) |
+| **Frequência da CPU** | 600 MHz a 1.20 GHz (Governor dinâmico térmico) |
+| **Memória RAM** | 1 GB DDR3 (~970 MB acessíveis pelo kernel) |
+| **Swap / ZRAM** | 485 MB comprimido via ZRAM (lz4) |
+| **Armazenamento Interno** | 8 GB eMMC Flash (~7.3 GB utilizáveis em `/dev/mmcblk2`) |
+| **Rede** | Ethernet Fast Ethernet (10/100 Mbps) + Wi-Fi integrado |
+| **Portas de Expansão** | 4x USB 2.0 + 1x Leitor de Cartão SD/MMC |
+| **Consumo Elétrico** | ~2.5W a 4.5W (Fonte 5V / 2A) |
+| **Sistema Operacional** | Armbian Linux (Debian Trixie) |
+| **Kernel** | Linux 6.18.60-current-rockchip (LTS moderno com patches RK322x) |
+
+---
+
 ## Arquitetura de Serviços
 
 O sistema disponibiliza uma suíte integrada de utilitários de infraestrutura local:
