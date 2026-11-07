@@ -22,6 +22,7 @@
       <dt>Câmera</dt><dd id="camera">—</dd>
       <dt>Eventos ONVIF</dt><dd id="onvif">—</dd>
       <dt>Gravação de clipes</dt><dd id="rec">—</dd>
+      <dt>Cumprimento falado</dt><dd id="speaker">—</dd>
       <dt>Tempo por ciclo</dt><dd id="cycle">—</dd>
       <dt>Galeria</dt><dd id="gallery">—</dd>
       <dt>Temperatura / carga</dt><dd id="temp">—</dd>
@@ -46,6 +47,8 @@ async function tick() {
       $('camera').textContent = s.camera_online ? `online · ${s.stream_size ? s.stream_size.join('×') : ''} · ${s.decoder_fps} qps` : 'offline';
       $('onvif').textContent = `${s.onvif} · ${s.onvif_events} recebidos`;
       $('rec').textContent = s.recorder_online ? 'ativa' : 'parada';
+      const sp = s.speaker || {};
+      $('speaker').textContent = sp.enabled ? (sp.last_error ? 'erro: ' + sp.last_error : `ok · ${sp.spoken} falas`) : (sp.last_error || 'desligado');
       $('cycle').textContent = s.cycle_ms ? (s.cycle_ms / 1000).toFixed(1) + ' s' : '—';
       $('gallery').textContent = `${s.gallery_members} membros · ${s.gallery_samples} amostras`;
       $('temp').textContent = `${s.cpu_temp ?? '—'} °C · ${s.load}`;

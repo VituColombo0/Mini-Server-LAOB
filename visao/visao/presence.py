@@ -47,9 +47,9 @@ class Presence:
             if not s:
                 continue
             cur = self.con.execute(
-                "UPDATE sessions SET last_seen_ts=?, sightings=?, best_score=? WHERE id=?",
-                (s["last_seen_ts"], s["sightings"], s["best_score"], s["id"]))
-            if cur.rowcount == 0:  # sessão apagada pela interface web
+                "UPDATE sessions SET last_seen_ts=?, sightings=?, best_score=? WHERE id=? AND member_id=?",
+                (s["last_seen_ts"], s["sightings"], s["best_score"], s["id"], mid))
+            if cur.rowcount == 0:  # sessão apagada ou corrigida para outra pessoa na interface web
                 self.open.pop(mid, None)
         self._dirty.clear()
 
@@ -65,7 +65,8 @@ class Presence:
     def _close(self, s):
         self.open.pop(s["member_id"], None)
         self._dirty.discard(s["member_id"])
-        exists = self.con.execute("SELECT 1 FROM sessions WHERE id=?", (s["id"],)).fetchone()
+        exists = self.con.execute("SELECT 1 FROM sessions WHERE id=? AND member_id=?",
+                                  (s["id"], s["member_id"])).fetchone()
         if not exists:
             return
         self.con.execute(

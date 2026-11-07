@@ -23,7 +23,8 @@ RUN = cfg.storage.runtime_dir
 AUTH_FILE = os.path.join(DATA, "web_auth.json")
 MEDIA_DIRS = ("events", "clips", "members")
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-KIND_LABEL = {"entry": "Identificado", "exit": "Saída", "unknown": "Desconhecido", "uncertain": "Não identificado"}
+KIND_LABEL = {"entry": "Identificado", "exit": "Saída", "unknown": "Desconhecido", "uncertain": "Não identificado",
+              "after_hours": "Fora do horário"}
 
 
 def read_auth():
@@ -129,6 +130,9 @@ def back(default="hoje"):
 def login():
     ip = request.remote_addr or "?"
     now = time.time()
+    if len(_fails) > 500:  # não deixa a tabela de tentativas crescer sem limite
+        for k in [k for k, v in _fails.items() if not v or now - v[-1] > 600]:
+            _fails.pop(k, None)
     fails = [t for t in _fails.get(ip, []) if now - t < 600]
     _fails[ip] = fails
     if request.method == "POST":
@@ -173,7 +177,7 @@ def hoje():
     events = [dict(r) for r in c.execute(
         "SELECT e.*, m.name, gm.name AS guess_name FROM events e "
         "LEFT JOIN members m ON m.id = e.member_id LEFT JOIN members gm ON gm.id = e.guess_member_id "
-        "WHERE e.ts >= ? AND e.ts < ? AND e.kind IN ('entry','unknown','uncertain') "
+        "WHERE e.ts >= ? AND e.ts < ? AND e.kind IN ('entry','unknown','uncertain','after_hours') "
         "ORDER BY e.ts DESC LIMIT 300", (t0, t1))]
     vistos = {}
     for s in sess:
@@ -438,6 +442,7 @@ def membros_editar(mid):
 def membros_excluir(mid):
     c = con()
     c.execute("DELETE FROM members WHERE id = ?", (mid,))
+    c.execute("DELETE FROM meta WHERE key = ?", (f"greeted:{mid}",))
     shutil.rmtree(os.path.join(DATA, "members", str(mid)), ignore_errors=True)
     db.bump_gallery(c)
     flash("Membro excluído, com fotos, amostras e histórico de presença.", "ok")

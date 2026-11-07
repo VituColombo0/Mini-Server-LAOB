@@ -45,7 +45,8 @@
       {% if e.crop_path|file_ok %}<img src="{{ url_for('media', p=e.crop_path) }}" alt="">{% else %}<span class="ph sm"></span>{% endif %}
       <div class="grow">
         <span class="pill {{ e.kind }}">{{ kind_label[e.kind] }}</span>
-        {% if e.kind in ('unknown', 'uncertain') %}
+        {% if e.kind == 'after_hours' %}movimento no laboratório no horário vigiado
+        {% elif e.kind in ('unknown', 'uncertain') %}
           {% if e.member_id %}depois identificado como <b>{{ e.name }}</b>{% elif e.kind == 'unknown' %}pessoa não cadastrada{% else %}rosto não reconhecido <a href="{{ url_for('revisao') }}">(revisar)</a>{% endif %}
         {% else %}<b>{{ e.name or '—' }}</b>
           {% if e.score %}<small class="muted">certeza {{ '%.2f'|format(e.score) }}</small>{% endif %}

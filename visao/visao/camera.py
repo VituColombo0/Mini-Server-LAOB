@@ -64,7 +64,7 @@ class FrameSource:
                 continue
             self.size = (w, h)
             cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-rtsp_transport", "tcp",
-                   "-timeout", "10000000", "-i", self.url, "-an",
+                   "-timeout", "10000000", "-threads", "1", "-i", self.url, "-an",
                    "-vf", f"select=not(mod(n\\,{self.every}))", "-fps_mode", "passthrough",
                    "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
             self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,

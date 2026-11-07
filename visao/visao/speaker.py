@@ -29,28 +29,33 @@ def saudacao(hour=None):
 class Speaker:
     def __init__(self, gcfg, cache_dir):
         self.cfg = gcfg
-        self.enabled = bool(gcfg.enabled)
+        # sem a senha da conta Tapo a câmera recusa o áudio: nem tenta (evita erro a cada pessoa)
+        self.enabled = bool(gcfg.enabled and gcfg.tapo_cloud_password)
         self.cache = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
         self.q = queue.Queue(maxsize=5)
-        self.last_ok, self.last_error, self.spoken = None, None, 0
+        self.results = queue.Queue()  # (member_id, ok, ts) para o detector registrar
+        self.last_ok, self.last_error, self.spoken, self.fails = None, None, 0, 0
+        if gcfg.enabled and not self.enabled:
+            self.last_error = "falta a senha da conta Tapo (greeting.tapo_cloud_password)"
 
     def start(self):
         if self.enabled:
             threading.Thread(target=self._run, daemon=True, name="speaker").start()
 
-    def greet(self, name):
+    def greet(self, name, member_id=None):
         text = self.cfg.message.format(saudacao=saudacao(), nome=name)
-        self.say(text)
+        self.say(text, member_id)
         return text
 
-    def say(self, text):
+    def say(self, text, member_id=None):
         if not self.enabled:
             return
         try:
-            self.q.put_nowait(text)
+            self.q.put_nowait((text, member_id))
         except queue.Full:
             log.warning("fila de fala cheia; descartando: %s", text)
+            self.results.put((member_id, False, time.time()))
 
     def synth(self, text):
         """Gera (ou reaproveita) o WAV da frase."""
@@ -74,13 +79,27 @@ class Speaker:
 
     def _run(self):
         while True:
-            text = self.q.get()
+            text, member_id = self.q.get()
+            ok = False
             try:
                 self.play(self.synth(text))
-                self.last_ok, self.last_error = time.time(), None
+                self.last_ok, self.last_error, ok = time.time(), None, True
                 self.spoken += 1
                 log.info("falou: %s", text)
             except Exception as e:
                 self.last_error = f"{type(e).__name__}: {e}"
                 log.warning("não foi possível falar '%s': %s", text, self.last_error)
+            self.fails = 0 if ok else self.fails + 1
+            if self.fails >= 3:
+                # a Tapo bloqueia a conta depois de muitas falhas de login: para de tentar
+                self.enabled = False
+                self.last_error = ("desligado após 3 falhas seguidas (confira a senha da conta Tapo "
+                                   "e reinicie o visao-detector)")
+                log.error(self.last_error)
+            self.results.put((member_id, ok, time.time()))
+            if not self.enabled:
+                while not self.q.empty():
+                    _, mid = self.q.get_nowait()
+                    self.results.put((mid, False, time.time()))
+                return
             time.sleep(1)

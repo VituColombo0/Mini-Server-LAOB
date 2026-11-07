@@ -11,6 +11,7 @@ Fluxo de cada ciclo:
 import json
 import logging
 import os
+import queue
 import shutil
 import signal
 import threading
@@ -43,6 +44,15 @@ def cpu_temp():
             return round(int(f.read().strip()) / 1000, 1)
     except Exception:
         return None
+
+
+def in_window(start, end, dt):
+    """True se o horário de dt está entre start e end ("HH:MM"), inclusive janelas que viram o dia."""
+    def mins(s):
+        h, m = s.split(":")
+        return int(h) * 60 + int(m)
+    a, b, x = mins(start), mins(end), dt.hour * 60 + dt.minute
+    return a <= x < b if a <= b else (x >= a or x < b)
 
 
 def ascii_label(text):
@@ -92,7 +102,11 @@ class Detector:
         self.pending_accepts = {}  # member_id -> ts da última leitura aceita ainda sem confirmação
         self.speaker = Speaker(cfg.greeting, os.path.join(self.run_dir, "tts"))
         self.speaker.start()
-        self.greeted = {}
+        self.greeted = {}       # member_id -> dia em que já foi cumprimentado (ou tentativa recente)
+        self._temp, self._temp_ts, self._thermal_level = 0.0, 0.0, 0
+        self.last_security = 0.0
+        self.clip_q = queue.Queue(maxsize=30)
+        threading.Thread(target=self._clip_worker, daemon=True, name="clips").start()
         self.prev_small, self.sw_motion_ts = None, 0.0
         self.last_scan = self.last_live = self.last_status = 0.0
         self.cycle_ms, self.last_faces = 0.0, 0
@@ -126,9 +140,12 @@ class Detector:
                 continue
             last_seq = seq
             self.update_sw_motion(frame, now)
+            self.check_security(frame, now)
             mode = self.mode = self.activity(now)
-            interval = {"ativo": 0.0, "acompanhando": self.cfg.detection.idle_track_interval_s,
-                        "ocioso": self.cfg.detection.heartbeat_s}[mode]
+            dc = self.cfg.detection
+            interval = {"ativo": 0.0, "estavel": dc.stable_interval_s,
+                        "acompanhando": dc.idle_track_interval_s, "ocioso": dc.heartbeat_s}[mode]
+            interval = max(interval, self.thermal_interval(now))
             if now - self.last_scan < interval:
                 if now - self.last_live > 10:
                     self.write_live(frame, [], now)
@@ -145,9 +162,29 @@ class Detector:
             self.write_status(now, mode)
         self.shutdown()
 
+    def thermal_interval(self, now):
+        """Proteção térmica: com a CPU quente, espaça as análises em vez de travar o servidor."""
+        if now - self._temp_ts > 10:
+            self._temp_ts, self._temp = now, cpu_temp() or 0.0
+        dc = self.cfg.detection
+        level = 2 if self._temp >= dc.temp_critical else 1 if self._temp >= dc.temp_hot else 0
+        if level != self._thermal_level:
+            log.warning("temperatura %.1f °C: %s", self._temp,
+                        ["normal, análise em ritmo normal", "quente, análise mais espaçada",
+                         "crítica, análise bem espaçada"][level])
+            self._thermal_level = level
+        return (0.0, 2.5, 8.0)[level]
+
     def activity(self, now):
-        if (self.capture is not None or self.onvif.motion_recent(8) or self.onvif.ptz_recent(4)
-                or now - self.sw_motion_ts < 4):
+        moving = (self.onvif.motion_recent(8) or self.onvif.ptz_recent(4)
+                  or now - self.sw_motion_ts < 4)
+        if self.capture is not None:
+            return "ativo"
+        if moving:
+            tracks = [t for t in self.tracker.tracks.values() if now - t.last_ts < 4]
+            # todos os rostos visíveis já identificados: basta olhar de vez em quando
+            if tracks and all(t.member_id is not None for t in tracks):
+                return "estavel"
             return "ativo"
         if self.tracker.alive(now, self.cfg.detection.track_ttl_s):
             return "acompanhando"
@@ -187,6 +224,9 @@ class Detector:
                          datetime.fromtimestamp(s["last_seen_ts"]).strftime("%H:%M"))
         if self.every("retention", 3600):
             self.retention(now)
+        if self.every("nightly", 600):
+            self.nightly(now)
+        self.drain_speaker()
 
     def poll_capture(self, now):
         if self.capture is not None:
@@ -249,13 +289,18 @@ class Detector:
         for t in expired:
             self.on_track_end(t)
         cands = []
+        capturing = self.capture is not None
         for t, f in matched:
-            if f.w < dc.min_face_px * 0.8:
-                continue
-            aligned, q, ok = self.engine.assess(frame, f, dc)
-            t.cur = (aligned, q, ok)
             if t.member_id is not None:
                 self.presence.touch(t.member_id, ts)
+            if f.w < dc.min_face_px * 0.8:
+                continue
+            needs = (capturing or (t.member_id is None and len(t.attempts) < dc.max_attempts)
+                     or (t.member_id is not None and ts - t.last_rec_ts > dc.reverify_s))
+            if not needs:
+                continue  # rosto já identificado e conferido há pouco: não gasta CPU com ele
+            aligned, q, ok = self.engine.assess(frame, f, dc)
+            t.cur = (aligned, q, ok)
             if not ok:
                 continue
             if t.member_id is None:
@@ -289,8 +334,9 @@ class Detector:
         if accepted:
             if t.member_id is None or (t.member_id != m1 and s1 >= t.member_score + 0.05):
                 t.member_id, t.member_score = m1, s1
-            if t.member_id == m1:
-                t.member_score = max(t.member_score, s1)
+            if t.member_id != m1:
+                return  # leitura aponta outra pessoa, mas sem força para trocar: ignora
+            t.member_score = max(t.member_score, s1)
             new = self.presence.seen(t.member_id, ts, s1)
             if new:
                 self.on_entry(new, t, frame, aligned, ts, s1, emb)
@@ -308,15 +354,78 @@ class Detector:
         if not self.speaker.enabled:
             return
         today = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-        key = f"greeted:{member_id}"
-        if self.greeted.get(member_id) == today or db.get_meta(self.con, key) == today:
+        mark = self.greeted.get(member_id)
+        if mark == today:
+            return
+        if isinstance(mark, float) and ts - mark < 300:
+            return  # tentativa recente falhou ou ainda está na fila: espera antes de repetir
+        if db.get_meta(self.con, f"greeted:{member_id}") == today:
             self.greeted[member_id] = today
             return
-        self.greeted[member_id] = today
-        self.con.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) "
-                         "DO UPDATE SET value=excluded.value", (key, today))
-        text = self.speaker.greet(self.gallery.names.get(member_id, ""))
+        self.greeted[member_id] = ts
+        text = self.speaker.greet(self.gallery.names.get(member_id, ""), member_id)
         log.info("cumprimento enfileirado: %s", text)
+
+    def drain_speaker(self):
+        """Só marca 'cumprimentado hoje' quando a câmera de fato falou."""
+        while True:
+            try:
+                member_id, ok, ts = self.speaker.results.get_nowait()
+            except queue.Empty:
+                return
+            if member_id is None or not ok:
+                continue
+            today = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            self.greeted[member_id] = today
+            self.con.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) "
+                             "DO UPDATE SET value=excluded.value", (f"greeted:{member_id}", today))
+
+    def check_security(self, frame, now):
+        """Modo segurança: movimento dentro do horário vigiado vira evento com foto e vídeo."""
+        sc = self.cfg.security
+        if not sc.enabled or now - self.last_security < sc.cooldown_min * 60:
+            return
+        if not in_window(sc.start, sc.end, datetime.fromtimestamp(now)):
+            return
+        onvif_ok = self.onvif.state == "ok"
+        moving = (self.onvif.motion_on and now - self.onvif.motion_ts < 120) if onvif_ok \
+            else now - self.sw_motion_ts < 2
+        if not moving or self.onvif.ptz_recent(2) and not onvif_ok:
+            return
+        self.last_security = now
+        d = self.day_dir("events", now)
+        snap = os.path.join(d, f"{datetime.fromtimestamp(now).strftime('%H%M%S')}_fora_do_horario.jpg")
+        cv2.imwrite(snap, frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        rel = os.path.relpath(snap, self.data)
+        cur = self.con.execute("INSERT INTO events(ts, kind, snapshot_path) VALUES(?, 'after_hours', ?)",
+                               (now, rel))
+        self.schedule_clip(now, cur.lastrowid, None)
+        log.warning("movimento fora do horário (%s–%s)", sc.start, sc.end)
+        if self.cfg.telegram.token:
+            self.notifier.send(f"🚨 Movimento no laboratório fora do horário às "
+                               f"{datetime.fromtimestamp(now).strftime('%H:%M')}", snap)
+
+    def nightly(self, now):
+        """Uma vez por dia (madrugada): backup do banco e otimização."""
+        dt = datetime.fromtimestamp(now)
+        today = dt.strftime("%Y-%m-%d")
+        if dt.hour < 3 or db.get_meta(self.con, "nightly") == today:
+            return
+        bdir = os.path.join(self.data, "backup")
+        os.makedirs(bdir, exist_ok=True)
+        dst = db.connect_raw(os.path.join(bdir, f"visao-{today}.db"))
+        try:
+            self.con.backup(dst)
+        finally:
+            dst.close()
+        for old in sorted(os.listdir(bdir))[:-3]:
+            os.remove(os.path.join(bdir, old))
+        self.con.execute("DELETE FROM meta WHERE key LIKE 'greeted:%' AND value < ?", (today,))
+        self.con.execute("PRAGMA optimize")
+        self.con.execute("VACUUM")
+        self.con.execute("INSERT INTO meta(key, value) VALUES('nightly', ?) ON CONFLICT(key) "
+                         "DO UPDATE SET value=excluded.value", (today,))
+        log.info("manutenção noturna: backup e otimização do banco feitos")
 
     def confirmed(self, t, m1, s1, ts):
         """Aceita a identificação com certeza alta, ou quando duas leituras concordam."""
@@ -465,10 +574,23 @@ class Detector:
     def schedule_clip(self, ts, event_id, session_id):
         if self.rec is None:
             return
-        st = self.cfg.storage
-        timer = threading.Timer(st.clip_after_s + 15, self._clip_job, (ts, event_id, session_id))
-        timer.daemon = True
-        timer.start()
+        due = ts + self.cfg.storage.clip_after_s + 15
+        try:
+            self.clip_q.put_nowait((due, ts, event_id, session_id))
+        except queue.Full:
+            log.warning("fila de clipes cheia; evento %s fica só com foto", event_id)
+
+    def _clip_worker(self):
+        """Monta um clipe por vez (vários ffmpeg ao mesmo tempo pesariam demais na TV Box)."""
+        while True:
+            due, ts, event_id, session_id = self.clip_q.get()
+            wait = due - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            if time.time() - ts > 150:  # os segmentos de vídeo na RAM já foram descartados
+                log.warning("clipe do evento %s atrasado demais; ficou só a foto", event_id)
+                continue
+            self._clip_job(ts, event_id, session_id)
 
     def _clip_job(self, ts, event_id, session_id):
         st = self.cfg.storage

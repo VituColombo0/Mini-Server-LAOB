@@ -32,6 +32,9 @@ DEFAULTS = {
         "track_ttl_s": 6.0,
         "heartbeat_s": 20,         # varredura periódica mesmo sem movimento
         "idle_track_interval_s": 3.0,
+        "stable_interval_s": 1.5,  # há movimento, mas todos os rostos visíveis já identificados
+        "temp_hot": 78.0,          # °C: acima disso a análise fica mais espaçada
+        "temp_critical": 85.0,     # °C: acima disso, bem mais espaçada (protege a TV Box)
         "frame_every": 4,          # usa 1 a cada N quadros do stream (15 fps -> ~4 fps)
         "threads": 4,
         "auto_enrich": True,       # aprende novas amostras quando a certeza é alta
@@ -68,6 +71,12 @@ DEFAULTS = {
         # O alto-falante da Tapo só aceita áudio pelo protocolo próprio da TP-Link, que pede a
         # senha da CONTA TAPO (a do app/nuvem), não a "Conta da câmera" usada no RTSP.
         "tapo_cloud_password": "",
+    },
+    "security": {
+        "enabled": False,          # modo segurança: movimento no horário abaixo vira alerta
+        "start": "23:00",
+        "end": "06:00",
+        "cooldown_min": 5,         # no máximo um alerta a cada N minutos
     },
     "telegram": {
         "token": "",

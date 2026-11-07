@@ -85,6 +85,7 @@ tr.dim td { color: var(--muted); }
 .pill.ok, .pill.entry { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .pill.exit { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .pill.unknown { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.pill.after_hours { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .pill.uncertain { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 
 .people { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 12px; }

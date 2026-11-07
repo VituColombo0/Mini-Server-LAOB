@@ -39,6 +39,14 @@ voice = "mb-br3"                  # mb-br1, mb-br3, mb-br4 ou pt-br
 # Depois de preencher: visao-cli go2rtc-config && systemctl restart visao-go2rtc
 tapo_cloud_password = ""
 
+[security]
+# Modo segurança: qualquer movimento nesse horário vira alerta com foto e vídeo
+# (e Telegram, se configurado). Deixe desligado se alguém trabalha de madrugada.
+enabled = false
+start = "23:00"
+end = "06:00"
+cooldown_min = 5
+
 [telegram]
 # Opcional: crie um bot com o @BotFather e coloque o token e o chat_id.
 token = ""

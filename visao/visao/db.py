@@ -87,6 +87,11 @@ def connect(path):
     return con
 
 
+def connect_raw(path):
+    """Conexão simples, sem criar o schema (usada como destino de backup)."""
+    return sqlite3.connect(path, timeout=30)
+
+
 def get_meta(con, key, default=None):
     row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else default
