@@ -147,6 +147,9 @@ class Gallery:
                 best[label] = s
         return sorted(best.items(), key=lambda kv: -kv[1])
 
+    def count(self, member_id):
+        return int((self.labels == member_id).sum())
+
     def member_sims(self, member_id, emb):
         mask = self.labels == member_id
         return self.matrix[mask] @ emb if mask.any() else np.zeros(0, np.float32)

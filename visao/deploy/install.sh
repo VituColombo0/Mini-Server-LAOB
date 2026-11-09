@@ -76,6 +76,13 @@ fi
 visao-cli go2rtc-config --saida "$BASE/go2rtc.yaml"
 chown root:visao "$BASE/go2rtc.yaml"; chmod 640 "$BASE/go2rtc.yaml"
 
+echo "[6b/7] watchdog: reinicia a TV Box sozinha se o sistema travar"
+mkdir -p /etc/systemd/system.conf.d
+printf '[Manager]\nRuntimeWatchdogSec=30s\nRebootWatchdogSec=2min\n' > /etc/systemd/system.conf.d/watchdog.conf
+printf 'kernel.panic = 10\n' > /etc/sysctl.d/90-visao-panic.conf
+sysctl -q -p /etc/sysctl.d/90-visao-panic.conf || true
+systemctl daemon-reexec
+
 echo "[7/7] serviços"
 install -m 644 "$SRC/deploy/visao-detector.service" "$SRC/deploy/visao-web.service" \
   "$SRC/deploy/visao-go2rtc.service" /etc/systemd/system/

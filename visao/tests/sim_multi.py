@@ -148,4 +148,23 @@ f1 = sp.phrase(["Victor", "Gazziro"], 2, 15, 0); f2 = sp.phrase(["Gazziro", "Vic
 check(f"dupla com ordem fixa dos nomes: '{f1}'", f1 == f2 == "Boa tarde, Gazziro e Victor!")
 check("sozinho de manhã: " + sp.phrase(["Mario"], 1, 9, 0), sp.phrase(["Mario"], 1, 9, 0) == "Bom dia, Mario! Que bom te ver.")
 check("3 pessoas à noite: " + sp.phrase(["Mario"], 3, 20, 0), sp.phrase(["Mario"], 3, 20, 0) == "Boa noite, pessoal! Que bom ver vocês.")
+# 12) Gazziro só com a foto do cadastro: leituras baixas (0,30) mas consistentes identificam
+d = make(); d.speaker.said.clear()
+for i in range(4): step(d, t0 + i, [(100, 2, 0.30)])
+check("poucas amostras: 3+ leituras consistentes identificam o Gazziro", list(names(d).values()) == ["Gazziro"])
+
+# 13) visitante com leituras baixas e espalhadas não vira membro por consenso
+d = make()
+for i in range(8): step(d, t0 + i, [(100, 9, 0.9)])
+check("visitante não é identificado por consenso", list(names(d).values()) == [None])
+
+# 14) revisão automática: rosto pendente que agora bate com um membro é resolvido sozinho
+d = make(); d.data = "/tmp"; added = []
+d.add_sample = lambda mid, *a: added.append(mid)
+d.con.execute("INSERT INTO events(ts, kind, embedding) VALUES(?, 'uncertain', ?)", (t0, db.emb_to_blob(emb_of(3, 0.6))))
+d.con.execute("INSERT INTO events(ts, kind, embedding) VALUES(?, 'uncertain', ?)", (t0, db.emb_to_blob(emb_of(9, 0.9))))
+d.reassess_review(t0)
+res = d.con.execute("SELECT member_id, resolved FROM events ORDER BY id").fetchall()
+check("revisão automática: Mario resolvido, visitante continua pendente",
+      [tuple(r) for r in res] == [(3, 1), (None, 0)])
 print("TUDO OK" if ok else "HÁ FALHAS")

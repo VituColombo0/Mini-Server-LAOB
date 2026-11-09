@@ -235,6 +235,8 @@ class Detector:
             self.retention(now)
         if self.every("nightly", 600):
             self.nightly(now)
+        if self.every("reassess", 1800):
+            self.reassess_review(now)
         self.flush_greeting(now)
         self.drain_speaker()
         if self.pending_unknown:
@@ -337,7 +339,8 @@ class Detector:
         matches = self.gallery.match(emb)
         m1, s1 = matches[0] if matches else (None, -1.0)
         s2 = matches[1][1] if len(matches) > 1 else -1.0
-        t.attempts.append((m1, s1, q["q"]))
+        side = q.get("side", False)
+        t.attempts.append((m1, s1, q["q"], s1 - s2, side))
         # guarda a leitura "difícil" deste rosto: se ele for confirmado depois, vira amostra
         if t.member_id is None and m1 is not None and 0.12 <= s1 < dc.accept and q["q"] >= 0.3 \
                 and (t.hard is None or s1 < t.hard["score"]):
@@ -345,7 +348,6 @@ class Detector:
         if t.best is None or q["q"] > t.best["q"]:
             t.best = {"q": q["q"], "aligned": aligned, "emb": emb, "frame": frame, "face": t.face,
                       "ts": ts, "guess": m1, "score": s1}
-        side = q.get("side", False)
         accepted = (m1 is not None and s1 >= (dc.accept_side if side else dc.accept)
                     and (s1 - s2) >= dc.margin * (2 if side else 1))
         if t.recheck:
@@ -355,7 +357,19 @@ class Detector:
                 log.info("track %d deixou de ser %s (reapareceu com %.2f)", t.id,
                          self.gallery.names.get(t.member_id), s1)
                 t.member_id, t.member_score = None, 0.0
-        if accepted and not self.confirmed(t, m1, s1, ts):
+        boot = False
+        if not accepted and not side and m1 is not None and self.gallery.count(m1) < dc.few_samples:
+            # membro com poucas amostras (ex.: só a foto de celular do cadastro): a câmera
+            # dá similaridades mais baixas para ele. Várias leituras do mesmo rosto apontando
+            # para ele, com folga sobre os outros, bastam para identificar e aprender sozinho.
+            agree = [a for a in t.attempts if a[0] == m1 and not a[4]
+                     and a[1] >= dc.boot_min and a[3] >= dc.boot_margin]
+            if len(agree) >= dc.boot_readings and \
+                    sum(a[1] for a in agree) / len(agree) >= dc.boot_mean:
+                accepted = boot = True
+                log.info("track %d: %s identificado por consenso (%d leituras, média %.2f)", t.id,
+                         self.gallery.names.get(m1), len(agree), sum(a[1] for a in agree) / len(agree))
+        if accepted and not boot and not self.confirmed(t, m1, s1, ts):
             # uma leitura só, sem muita certeza: espera a próxima confirmar (menos erros)
             log.debug("track %d: %s (%.2f) aguardando confirmação", t.id, self.gallery.names.get(m1), s1)
             return
@@ -375,7 +389,7 @@ class Detector:
             if new:
                 self.on_entry(new, t, frame, aligned, ts, s1, emb)
             self.maybe_greet(t.member_id, ts, t.first_ts)
-            self.maybe_auto_enrich(t.member_id, emb, aligned, q, s1, ts)
+            self.maybe_auto_enrich(t.member_id, emb, aligned, q, s1, ts, boot)
             self.learn_hard(t, emb, ts)
             log.debug("track %d = %s (%.2f)", t.id, self.gallery.names.get(t.member_id), s1)
         elif side:
@@ -479,6 +493,39 @@ class Detector:
         if self.cfg.telegram.token:
             self.notifier.send(f"🚨 Movimento no laboratório fora do horário às "
                                f"{datetime.fromtimestamp(now).strftime('%H:%M')}", snap)
+
+    def reassess_review(self, now):
+        """Rostos que ficaram para revisar são conferidos de novo com a galeria atual (que vai
+        crescendo sozinha). Os que agora batem claramente com um membro são resolvidos sem
+        ninguém precisar abrir a página Revisão; de membros com poucas amostras, viram amostra."""
+        dc = self.cfg.detection
+        if not len(self.gallery):
+            return
+        rows = self.con.execute(
+            "SELECT id, ts, kind, embedding, crop_path FROM events WHERE kind IN ('unknown','uncertain') "
+            "AND resolved = 0 AND embedding IS NOT NULL ORDER BY ts DESC LIMIT 300").fetchall()
+        done, learned = 0, {}
+        for r in rows:
+            emb = db.blob_to_emb(r["embedding"])
+            matches = self.gallery.match(emb)
+            m1, s1 = matches[0]
+            s2 = matches[1][1] if len(matches) > 1 else -1.0
+            if s1 < dc.accept + 0.04 or s1 - s2 < dc.boot_margin:
+                continue
+            self.con.execute("UPDATE events SET resolved = 1, member_id = ?, details = ? WHERE id = ?",
+                             (m1, f"identificado depois, automaticamente ({s1:.2f})", r["id"]))
+            done += 1
+            if (self.gallery.count(m1) + learned.get(m1, 0) < dc.few_samples and r["crop_path"]
+                    and learned.get(m1, 0) < 3):
+                img = cv2.imread(os.path.join(self.data, r["crop_path"]))
+                sims = self.gallery.member_sims(m1, emb)
+                if img is not None and not (sims.size and float(sims.max()) >= 0.80):
+                    self.add_sample(m1, "auto", img, emb, None, now,
+                                    f"aprendida da revisão automática ({s1:.2f})")
+                    learned[m1] = learned.get(m1, 0) + 1
+        if done:
+            log.info("revisão automática: %d rosto(s) resolvido(s), %d virou(aram) amostra",
+                     done, sum(learned.values()))
 
     def nightly(self, now):
         """Uma vez por dia (madrugada): backup do banco e otimização."""
@@ -660,7 +707,7 @@ class Detector:
                         f"ângulo difícil aprendido (era {h['score']:.2f})")
         log.info("aprendeu ângulo difícil de %s (%.2f)", self.gallery.names.get(t.member_id), h["score"])
 
-    def maybe_auto_enrich(self, member_id, emb, aligned, q, score, ts):
+    def maybe_auto_enrich(self, member_id, emb, aligned, q, score, ts, boot=False):
         dc = self.cfg.detection
         sims = self.gallery.member_sims(member_id, emb)
         if sims.size >= dc.enrich_until:
@@ -668,7 +715,7 @@ class Detector:
         # membro com poucas amostras (só a foto do cadastro): aprende mais rápido, com um
         # limiar um pouco menor, até ter uma base boa
         few = sims.size < dc.few_samples
-        min_score = dc.auto_enrich_score - (0.05 if few else 0.0)
+        min_score = dc.boot_min if boot else dc.auto_enrich_score - (0.05 if few else 0.0)
         if not dc.auto_enrich or score < min_score or q["q"] < (0.25 if few else 0.35):
             return
         if ts - self.last_auto.get(member_id, 0.0) < (30 if few else 120):
@@ -686,6 +733,7 @@ class Detector:
                     pass
             self.con.execute("DELETE FROM samples WHERE id=?", (old["id"],))
         self.add_sample(member_id, "auto", aligned, emb, q["q"], ts,
+                        f"aprendida por consenso de leituras ({score:.2f})" if boot else
                         f"aprendida automaticamente (similaridade {score:.2f})")
         self.last_auto[member_id] = ts
 

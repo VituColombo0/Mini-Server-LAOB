@@ -38,7 +38,11 @@ Tapo C200 ──RTSP 720p──▶ ffmpeg (decodifica ~4 qps) ──▶ detector
    de visual. Corrigir uma identificação errada (página Hoje → "corrigir") desfaz o que foi
    aprendido naquela identificação e ensina o rosto à pessoa certa. Membro com poucas amostras
    (menos de 8) aprende mais rápido, até formar uma base boa; a página Membros avisa quem
-   precisa de "Capturar pela câmera".
+   precisa de "Capturar pela câmera". Quem só tem a foto de celular do cadastro também é
+   aprendido sozinho: 3 leituras do mesmo rosto apontando para ele, com folga sobre os outros,
+   bastam para identificar e guardar a amostra da câmera.
+   **Revisão automática:** a cada 30 min, os rostos pendentes são conferidos de novo com a
+   galeria atual; os que agora batem claramente com um membro são resolvidos sozinhos.
 8. **Cumprimento:** sozinho na cena, fala logo após identificar. Com outros rostos próximos
    ainda sem nome, espera até 5 s para juntar: dois membros → os dois nomes; com visitante ou
    3+ pessoas → "pessoal". Quem já foi cumprimentado hoje não entra na conta. Só cumprimenta
@@ -50,6 +54,10 @@ Desempenho medido na TV Box: detecção ~0,6 s por quadro, reconhecimento ~0,9 s
 decodificação do 720p ~70% de um núcleo, gravação do 1080p ~20% de um núcleo.
 
 ## Proteções e manutenção
+
+- **Watchdog de hardware:** se a TV Box travar (sistema parado por mais de 30 s), o próprio
+  hardware a reinicia; um kernel panic reinicia em 10 s (`/etc/systemd/system.conf.d/watchdog.conf`
+  e `/etc/sysctl.d/90-visao-panic.conf`). Os serviços sobem sozinhos no boot.
 
 - **Proteção térmica:** acima de 78 °C a análise fica mais espaçada; acima de 85 °C, bem mais.
 - **Ritmo adaptativo:** quando todos os rostos visíveis já estão identificados, analisa a cada 1,5 s;
