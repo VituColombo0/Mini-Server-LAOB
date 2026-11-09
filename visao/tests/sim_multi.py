@@ -133,4 +133,19 @@ d.gallery.labels = np.array([1] * 25 + [2])
 Detector.maybe_auto_enrich(d, 1, emb_of(1, 0.6), None, {"q": 0.9}, 0.6, t0)
 Detector.maybe_auto_enrich(d, 2, emb_of(2, 0.6), None, {"q": 0.9}, 0.6, t0)
 check("base completa (25): Victor não é mais capturado; Gazziro (1 amostra) é", added == [2])
+# 10) na sala desde antes da meia-noite (sessão aberta há 2 h): não cumprimenta no "novo dia"
+d = make()
+d.presence.seen(1, t0 - 7200, 0.6)
+for k in range(12): d.presence.touch(1, t0 - 7200 + 600 * (k + 1))  # visto o tempo todo
+for i in range(3): step(d, t0 + i, [(100, 1, 0.55)])
+check("já estava na sala há 2 h: não cumprimenta", d.speaker.said == [])
+
+# 11) frases de dupla e de prewarm fazem sentido (com a classe real do Speaker)
+from visao.speaker import Speaker
+import tempfile
+sp = Speaker(load("/nonexistent.toml").greeting, tempfile.mkdtemp())
+f1 = sp.phrase(["Victor", "Gazziro"], 2, 15, 0); f2 = sp.phrase(["Gazziro", "Victor"], 2, 15, 0)
+check(f"dupla com ordem fixa dos nomes: '{f1}'", f1 == f2 == "Boa tarde, Gazziro e Victor!")
+check("sozinho de manhã: " + sp.phrase(["Mario"], 1, 9, 0), sp.phrase(["Mario"], 1, 9, 0) == "Bom dia, Mario! Que bom te ver.")
+check("3 pessoas à noite: " + sp.phrase(["Mario"], 3, 20, 0), sp.phrase(["Mario"], 3, 20, 0) == "Boa noite, pessoal! Que bom ver vocês.")
 print("TUDO OK" if ok else "HÁ FALHAS")

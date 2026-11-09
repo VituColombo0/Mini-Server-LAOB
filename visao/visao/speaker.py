@@ -64,7 +64,8 @@ class Speaker:
         if people <= 1 and len(names) == 1:
             return "one", self.cfg.messages_one, {"nome": names[0]}
         if people == 2 and len(names) == 2:
-            return "two", self.cfg.messages_two, {"nome1": names[0], "nome2": names[1]}
+            a, b = sorted(names)  # ordem fixa: a frase pronta serve para a dupla nos dois casos
+            return "two", self.cfg.messages_two, {"nome1": a, "nome2": b}
         return "group", self.cfg.messages_group, {}
 
     def phrase(self, names, people=None, hour=None, pick=None):
@@ -115,9 +116,15 @@ class Speaker:
         now = datetime.now().hour
         hours = [now] + [h for h in (9, 15, 20) if saudacao(h) != saudacao(now)]
         texts = []
+        names = sorted(names)
+        pairs = ([(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
+                 if len(names) <= 8 else [])  # duplas: cresce rápido com muitos membros
         for h in hours:
             texts += [self.phrase([n], 1, h, i) for n in names for i in range(len(self.cfg.messages_one))]
             texts += [self.phrase([], 3, h, i) for i in range(len(self.cfg.messages_group))]
+        for h in hours:  # depois das individuais e de grupo, as duplas
+            texts += [self.phrase([a, b], 2, h, i) for a, b in pairs
+                      for i in range(len(self.cfg.messages_two))]
         self.generate_later(texts)
 
     def generate_later(self, texts):

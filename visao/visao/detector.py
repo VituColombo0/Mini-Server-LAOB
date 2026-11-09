@@ -399,6 +399,12 @@ class Detector:
         if db.get_meta(self.con, f"greeted:{member_id}") == today:
             self.greeted[member_id] = today
             return
+        # só faz sentido cumprimentar quem está chegando: se a pessoa já está na sala há muito
+        # tempo (passou da meia-noite trabalhando, ou ficou sem ser reconhecida), não fala
+        s = self.presence.open.get(member_id)
+        if s and ts - s["start_ts"] > self.cfg.greeting.arrival_window_min * 60:
+            self.greeted[member_id] = today
+            return
         self.greeted[member_id] = ts
         # se houver mais rostos na cena, espera um pouco para juntar quem chegou junto
         if self.greet_batch is None:

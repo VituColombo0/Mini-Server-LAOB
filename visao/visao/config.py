@@ -77,6 +77,7 @@ DEFAULTS = {
         "messages_group": ["{saudacao}, pessoal! Que bom ver vocês.",
                            "{saudacao} a todos!"],
         "group_window_s": 5,                 # máx. de espera por outros rostos para cumprimentar juntos
+        "arrival_window_min": 15,            # só cumprimenta quem chegou há no máx. N minutos
         "group_min_s": 0.3,                  # sozinho na cena: fala praticamente na hora
         "engine": "piper",                   # piper (voz neural, natural) ou espeak (robótica, leve)
         "piper_bin": "/opt/visao/piper/piper",

@@ -41,7 +41,10 @@ Tapo C200 ──RTSP 720p──▶ ffmpeg (decodifica ~4 qps) ──▶ detector
    precisa de "Capturar pela câmera".
 8. **Cumprimento:** sozinho na cena, fala logo após identificar. Com outros rostos próximos
    ainda sem nome, espera até 5 s para juntar: dois membros → os dois nomes; com visitante ou
-   3+ pessoas → "pessoal". Quem já foi cumprimentado hoje não entra na conta.
+   3+ pessoas → "pessoal". Quem já foi cumprimentado hoje não entra na conta. Só cumprimenta
+   quem está chegando (sessão aberta há no máx. 15 min): quem passa da meia-noite na sala não
+   ouve "boa noite, que bom te ver" de novo. As frases de cada membro, do grupo e das duplas
+   ficam prontas com antecedência na voz natural.
 
 Desempenho medido na TV Box: detecção ~0,6 s por quadro, reconhecimento ~0,9 s por rosto,
 decodificação do 720p ~70% de um núcleo, gravação do 1080p ~20% de um núcleo.
