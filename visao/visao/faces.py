@@ -86,11 +86,14 @@ class FaceEngine:
         aligned = self.align(frame, face)
         sh = sharpness(aligned)
         yaw = face.yaw()
-        ok = (face.w >= dc.min_face_px and abs(yaw) <= dc.yaw_max
+        # de frente (yaw <= yaw_max) ou de lado/perfil (até yaw_side_max, aceito com mais rigor)
+        side = abs(yaw) > dc.yaw_max
+        ok = (face.w >= dc.min_face_px and abs(yaw) <= dc.yaw_side_max
               and sh >= dc.sharp_min and face.score >= dc.rec_det_score)
         q = (min(face.w / 80.0, 1.5) * max(0.0, 1 - abs(yaw))
              * min(sh / 150.0, 1.5) * face.score)
-        return aligned, {"w": face.w, "yaw": yaw, "sharp": sh, "score": face.score, "q": q}, ok
+        return aligned, {"w": face.w, "yaw": yaw, "sharp": sh, "score": face.score, "q": q,
+                         "side": side}, ok
 
     def enroll_image(self, img):
         """Para fotos de cadastro: escolhe o maior rosto. Levanta ValueError se não servir."""

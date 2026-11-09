@@ -18,7 +18,10 @@ DEFAULTS = {
         "det_score_min": 0.6,      # confiança mínima para considerar um rosto
         "rec_det_score": 0.7,      # confiança mínima para tentar reconhecer
         "min_face_px": 36,         # largura mínima do rosto (px no quadro 720p)
-        "yaw_max": 0.35,           # quão de lado o rosto pode estar (0 = de frente)
+        "yaw_max": 0.42,           # até aqui o rosto conta como "de frente" (0 = de frente)
+        "yaw_side_max": 0.80,      # de lado/perfil até aqui: reconhece, mas pede accept_side
+        "accept_side": 0.33,       # similaridade mínima para rosto de lado (sempre com 2 leituras)
+        "retry_s": 6,              # rosto sem nome que esgotou as tentativas: tenta de novo a cada N s
         "sharp_min": 25.0,         # nitidez mínima do recorte
         "accept": 0.32,            # similaridade mínima (com 2 leituras concordando abaixo de 0,50)
         "margin": 0.04,            # vantagem mínima sobre o 2º membro mais parecido

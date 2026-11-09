@@ -184,6 +184,10 @@ class Detector:
                   or now - self.sw_motion_ts < 4)
         if self.capture is not None:
             return "ativo"
+        # rosto novo ainda sem nome: análise contínua mesmo parado, para identificar rápido
+        if any(t.member_id is None and now - t.first_ts < 15 and now - t.last_ts < 3
+               for t in self.tracker.tracks.values()):
+            return "ativo"
         if moving:
             tracks = [t for t in self.tracker.tracks.values() if now - t.last_ts < 4]
             # todos os rostos visíveis já identificados: basta olhar de vez em quando
@@ -303,7 +307,8 @@ class Detector:
                 self.presence.touch(t.member_id, ts)
             if f.w < dc.min_face_px * 0.8:
                 continue
-            needs = (capturing or (t.member_id is None and len(t.attempts) < dc.max_attempts)
+            fresh = len(t.attempts) < dc.max_attempts or ts - t.last_rec_ts > dc.retry_s
+            needs = (capturing or (t.member_id is None and fresh)
                      or (t.member_id is not None and ts - t.last_rec_ts > dc.reverify_s))
             if not needs:
                 continue  # rosto já identificado e conferido há pouco: não gasta CPU com ele
@@ -312,7 +317,7 @@ class Detector:
             if not ok:
                 continue
             if t.member_id is None:
-                if len(t.attempts) < dc.max_attempts:
+                if fresh:
                     cands.append((0, -q["q"], t))
             elif ts - t.last_rec_ts > dc.reverify_s:
                 cands.append((1, -q["q"], t))
@@ -338,7 +343,9 @@ class Detector:
         if t.best is None or q["q"] > t.best["q"]:
             t.best = {"q": q["q"], "aligned": aligned, "emb": emb, "frame": frame, "face": t.face,
                       "ts": ts, "guess": m1, "score": s1}
-        accepted = m1 is not None and s1 >= dc.accept and (s1 - s2) >= dc.margin
+        side = q.get("side", False)
+        accepted = (m1 is not None and s1 >= (dc.accept_side if side else dc.accept)
+                    and (s1 - s2) >= dc.margin * (2 if side else 1))
         if accepted and not self.confirmed(t, m1, s1, ts):
             # uma leitura só, sem muita certeza: espera a próxima confirmar (menos erros)
             log.debug("track %d: %s (%.2f) aguardando confirmação", t.id, self.gallery.names.get(m1), s1)
@@ -353,17 +360,19 @@ class Detector:
             new = self.presence.seen(t.member_id, ts, s1)
             if new:
                 self.on_entry(new, t, frame, aligned, ts, s1, emb)
-            self.maybe_greet(t.member_id, ts)
+            self.maybe_greet(t.member_id, ts, t.first_ts)
             self.maybe_auto_enrich(t.member_id, emb, aligned, q, s1, ts)
             self.learn_hard(t, emb, ts)
             log.debug("track %d = %s (%.2f)", t.id, self.gallery.names.get(t.member_id), s1)
+        elif side:
+            pass  # leitura de lado fraca não serve de prova de "desconhecido"
         elif t.member_id is not None and s1 < dc.unknown:
             # a reconfirmação falhou feio: provavelmente outra pessoa entrou no lugar
             t.member_id, t.member_score = None, 0.0
         elif t.member_id is None and len(self.gallery) and s1 < dc.unknown:
             self.low_reading(t, emb, aligned, frame, ts, s1, m1)
 
-    def maybe_greet(self, member_id, ts):
+    def maybe_greet(self, member_id, ts, seen_ts=None):
         """Cumprimenta o membro na primeira identificação do dia (vale também após reiniciar)."""
         if not self.speaker.enabled:
             return
@@ -380,7 +389,7 @@ class Detector:
         # se houver mais rostos na cena, espera um pouco para juntar quem chegou junto
         if self.greet_batch is None:
             self.greet_batch = {"start": ts, "due": ts + self.cfg.greeting.group_window_s,
-                                "members": [], "people": 0}
+                                "members": [], "people": 0, "seen": seen_ts or ts}
         if member_id not in self.greet_batch["members"]:
             self.greet_batch["members"].append(member_id)
 
@@ -400,8 +409,9 @@ class Detector:
         self.greet_batch = None
         names = [self.gallery.names.get(m, "") for m in b["members"]]
         text = self.speaker.greet(names, b["members"], b["people"])
-        log.info("cumprimento enfileirado (%d identificado(s), %d pessoa(s) na cena): %s",
-                 len(names), b["people"], text)
+        log.info("cumprimento enfileirado %.1f s depois de o rosto aparecer "
+                 "(%d identificado(s), %d pessoa(s) na cena): %s",
+                 now - b["seen"], len(names), b["people"], text)
 
     def drain_speaker(self):
         """Só marca 'cumprimentado hoje' quando a câmera de fato falou."""
