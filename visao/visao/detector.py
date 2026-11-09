@@ -377,10 +377,10 @@ class Detector:
             self.greeted[member_id] = today
             return
         self.greeted[member_id] = ts
-        # não fala na hora: espera alguns segundos para juntar quem chegou junto
+        # se houver mais rostos na cena, espera um pouco para juntar quem chegou junto
         if self.greet_batch is None:
-            self.greet_batch = {"due": ts + self.cfg.greeting.group_window_s, "members": [],
-                                "people": 0}
+            self.greet_batch = {"start": ts, "due": ts + self.cfg.greeting.group_window_s,
+                                "members": [], "people": 0}
         if member_id not in self.greet_batch["members"]:
             self.greet_batch["members"].append(member_id)
 
@@ -390,8 +390,12 @@ class Detector:
         b = self.greet_batch
         if b is None:
             return
-        b["people"] = max(b["people"], self.last_faces, len(self.tracker.tracks))
-        if now < b["due"]:
+        visible = [t for t in self.tracker.tracks.values() if now - t.last_ts < 2.5]
+        b["people"] = max(b["people"], self.last_faces, len(visible))
+        # sozinho na cena (ou todos já identificados): fala já; com rosto ainda sem nome,
+        # espera até group_window_s para ver se é outro membro e cumprimentar os dois/o grupo
+        waiting = any(t.member_id is None for t in visible)
+        if now < b["due"] and (waiting or now - b["start"] < self.cfg.greeting.group_min_s):
             return
         self.greet_batch = None
         names = [self.gallery.names.get(m, "") for m in b["members"]]

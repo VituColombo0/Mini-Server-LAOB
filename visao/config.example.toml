@@ -38,6 +38,8 @@ enabled = true
 messages_one = ["{saudacao}, {nome}! Que bom te ver.", "Olá, {nome}! {saudacao}.", "{saudacao}, {nome}! Bom trabalho hoje."]
 messages_two = ["{saudacao}, {nome1} e {nome2}!", "Olá, {nome1} e {nome2}! {saudacao}."]
 messages_group = ["{saudacao}, pessoal! Que bom ver vocês.", "{saudacao} a todos!"]
+loudness = 1.25                   # volume da fala (1.0 = original; 1.25 = +25%)
+group_window_s = 5                # sozinho: fala na hora; com outros rostos, espera até 5 s para juntar
 engine = "piper"                  # piper = voz neural natural; espeak = robótica (reserva)
 voice = "mb-br3"                  # mb-br1, mb-br3, mb-br4 ou pt-br
 # Por onde sai o som: "local" = caixinha/fone no conector AV da TV Box (ou HDMI),

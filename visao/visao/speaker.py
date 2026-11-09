@@ -19,6 +19,8 @@ import urllib.request
 import wave
 from datetime import datetime
 
+import numpy as np
+
 log = logging.getLogger("visao.speaker")
 
 
@@ -215,8 +217,48 @@ class Speaker:
         subprocess.run(["aplay", "-q", "-D", self.cfg.local_device, path],
                        check=True, capture_output=True, timeout=30)
 
+    def louder(self, path):
+        """Versão mais alta da frase (greeting.loudness: 1.25 = +25% de volume percebido).
+        Os picos da voz já batem no máximo, então um limitador suave segura só os picos em
+        vez de estourar o som. Fica guardada ao lado do original."""
+        target = float(self.cfg.loudness)
+        if abs(target - 1.0) < 0.01:
+            return path
+        out = f"{path[:-4]}.v{int(round(target * 100))}.wav"
+        if os.path.exists(out):
+            return out
+        with wave.open(path, "rb") as src:
+            params, raw = src.getparams(), src.readframes(src.getnframes())
+        if params.sampwidth != 2:
+            return path
+        x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+        knee = 0.6
+
+        def limit(v):
+            a = np.abs(v)
+            over = a > knee
+            a[over] = knee + (1 - knee) * np.tanh((a[over] - knee) / (1 - knee))
+            return np.sign(v) * a * 0.97
+
+        base = float(np.sqrt(np.mean(x * x))) or 1.0
+        lo, hi = 1.0, 4.0
+        for _ in range(14):  # acha o ganho que dá o volume pedido depois do limitador
+            g = (lo + hi) / 2
+            if float(np.sqrt(np.mean(limit(x * g) ** 2))) / base < target:
+                lo = g
+            else:
+                hi = g
+        y = (limit(x * lo) * 32767).astype(np.int16)
+        tmp = f"{out}.{threading.get_ident()}.tmp"
+        with wave.open(tmp, "wb") as dst:
+            dst.setparams(params)
+            dst.writeframes(y.tobytes())
+        os.replace(tmp, out)
+        return out
+
     def play(self, path):
         """Toca pela saída configurada. Retorna o nome da saída usada."""
+        path = self.louder(path)
         if self.camera_ok:
             try:
                 self.play_camera(path)

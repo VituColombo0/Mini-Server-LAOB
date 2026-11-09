@@ -14,7 +14,7 @@ DEFAULTS = {
         "sub_stream": "stream2",   # 720p: usado para a análise
     },
     "detection": {
-        "det_width": 640,          # largura usada pelo detector (o quadro é reduzido)
+        "det_width": 576,          # largura usada pelo detector (menor = mais rápido, alcance menor)
         "det_score_min": 0.6,      # confiança mínima para considerar um rosto
         "rec_det_score": 0.7,      # confiança mínima para tentar reconhecer
         "min_face_px": 36,         # largura mínima do rosto (px no quadro 720p)
@@ -70,7 +70,8 @@ DEFAULTS = {
                          "Olá, {nome1} e {nome2}! {saudacao}."],
         "messages_group": ["{saudacao}, pessoal! Que bom ver vocês.",
                            "{saudacao} a todos!"],
-        "group_window_s": 6,                 # espera um pouco para cumprimentar quem chega junto
+        "group_window_s": 5,                 # máx. de espera por outros rostos para cumprimentar juntos
+        "group_min_s": 0.3,                  # sozinho na cena: fala praticamente na hora
         "engine": "piper",                   # piper (voz neural, natural) ou espeak (robótica, leve)
         "piper_bin": "/opt/visao/piper/piper",
         "piper_model": "/opt/visao/voices/pt_BR-faber-medium.onnx",
@@ -82,6 +83,7 @@ DEFAULTS = {
         "output": "auto",                    # local (TV Box) | camera (Tapo) | auto (câmera, senão local)
         "local_device": "plughw:CARD=analog,DEV=0",  # conector AV; HDMI: plughw:CARD=HDMI,DEV=0
         "lead_silence_s": 2.0,               # silêncio antes da frase (a câmera demora a ativar o som)
+        "loudness": 1.25,                    # volume da fala: 1.0 = original, 1.25 = +25%
         "go2rtc_url": "http://127.0.0.1:1984",
         "stream": "camera",
         # O alto-falante da Tapo só aceita áudio pelo protocolo próprio da TP-Link, que pede a
