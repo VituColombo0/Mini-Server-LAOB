@@ -53,6 +53,21 @@ sudo cat /root/visao-senha-inicial.txt
 
 A interface fica em `http://<ip-do-servidor>:8080` (pela rede local ou pelo Tailscale).
 
+## Cumprimento falado pela câmera
+
+Na primeira identificação do dia, o Visão diz "Bom dia / Boa tarde / Boa noite, Nome!" pelo
+alto-falante da Tapo (ou pela saída de som da TV Box, como reserva). Para a C200 aceitar o áudio:
+
+1. No app Tapo: **Eu → Tapo Lab → Compatibilidade com terceiros → Ligado** (sem isso a câmera
+   responde 401 mesmo com a senha certa).
+2. Em `/opt/visao/config.toml`, seção `[greeting]`: `tapo_cloud_password` = senha da conta
+   TP-Link do app (não a "Conta da câmera"), `tapo_auth = "sha256"`, `output = "auto"`.
+3. `visao-cli go2rtc-config && systemctl restart visao-go2rtc visao-detector`
+4. `visao-cli testar-camera` (uma tentativa só) e `visao-cli falar "Olá!"`.
+
+A Tapo bloqueia o login depois de várias falhas seguidas; por isso o Visão para de tentar a câmera
+após 3 falhas e o comando de teste faz uma única tentativa.
+
 ## Uso
 
 - **Hoje:** quem foi identificado (primeira e última vez), eventos com foto/vídeo e correção.

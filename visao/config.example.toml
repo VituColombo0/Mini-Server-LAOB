@@ -42,6 +42,9 @@ local_device = "plughw:CARD=analog,DEV=0"   # HDMI: "plughw:CARD=HDMI,DEV=0"
 # Senha da CONTA TAPO (a do app), necessária para mandar áudio para a câmera.
 # Depois de preencher: visao-cli go2rtc-config && systemctl restart visao-go2rtc
 tapo_cloud_password = ""
+tapo_auth = "sha256"              # C200 com firmware novo: sha256 (outros: md5, plain)
+# Também é preciso ligar no app Tapo: Eu → Tapo Lab → Compatibilidade com terceiros.
+# Teste com uma única tentativa: visao-cli testar-camera
 
 [security]
 # Modo segurança: qualquer movimento nesse horário vira alerta com foto e vídeo
