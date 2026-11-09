@@ -161,8 +161,8 @@ def cmd_senha(a):
 def cmd_falar(a):
     """Testa o alto-falante da câmera com uma frase."""
     from .speaker import Speaker
-    sp = Speaker(cfg.greeting, os.path.join(cfg.storage.runtime_dir, "tts"))
-    path = sp.synth(a.texto)
+    sp = Speaker(cfg.greeting, os.path.join(cfg.storage.data_dir, "tts"))
+    path = sp.synth(a.texto, a.voz)
     print(f"áudio gerado: {path} (saída configurada: {sp.output})")
     try:
         route = sp.play(path)
@@ -271,6 +271,7 @@ def main():
     sp.set_defaults(fn=cmd_testar_camera)
     sp = sub.add_parser("falar")
     sp.add_argument("texto")
+    sp.add_argument("--voz", choices=["piper", "espeak"], help="motor de voz (padrão: o configurado)")
     sp.set_defaults(fn=cmd_falar)
     a = p.parse_args()
     sys.exit(a.fn(a))

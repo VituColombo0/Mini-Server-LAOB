@@ -41,6 +41,19 @@ if [ ! -x "$BASE/bin/go2rtc" ]; then
   chmod 755 "$BASE/bin/go2rtc"
 fi
 
+echo "[4c/7] voz natural (Piper, pt-BR)"
+mkdir -p "$BASE/piper" "$BASE/voices"
+if [ ! -x "$BASE/piper/piper" ]; then
+  curl -fsSL --retry 5 -o /tmp/piper.tgz \
+    "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_armv7l.tar.gz"
+  tar -xzf /tmp/piper.tgz -C "$BASE/piper" --strip-components=1 && rm -f /tmp/piper.tgz
+fi
+VOICE=pt_BR-faber-medium
+for ext in onnx onnx.json; do
+  [ -s "$BASE/voices/$VOICE.$ext" ] || curl -fsSL --retry 5 -o "$BASE/voices/$VOICE.$ext" \
+    "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/$VOICE.$ext"
+done
+
 echo "[5/7] código"
 rsync -a --delete --exclude '__pycache__' "$SRC/visao/" "$BASE/app/visao/"
 install -m 755 "$SRC/deploy/visao-cli" /usr/local/bin/visao-cli

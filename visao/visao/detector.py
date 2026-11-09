@@ -102,7 +102,8 @@ class Detector:
         self.pending_unknown = []                 # alertas esperando confirmação (45 s)
         self.recent_confirmed = deque(maxlen=60)  # (ts, embedding, member_id) reconhecidos
         self.pending_accepts = {}  # member_id -> ts da última leitura aceita ainda sem confirmação
-        self.speaker = Speaker(cfg.greeting, os.path.join(self.run_dir, "tts"))
+        # frases ficam no disco: a voz natural (Piper) é lenta para gerar e não deve se perder
+        self.speaker = Speaker(cfg.greeting, os.path.join(self.data, "tts"))
         self.speaker.start()
         self.greet_batch = None  # cumprimento esperando a janela para juntar o grupo
         self.greeted = {}       # member_id -> dia em que já foi cumprimentado (ou tentativa recente)
@@ -733,7 +734,8 @@ class Detector:
                          "target": self.capture["target"]} if self.capture else None),
             "speaker": {"enabled": self.speaker.enabled, "spoken": self.speaker.spoken,
                         "last_ok": self.speaker.last_ok, "last_error": self.speaker.last_error,
-                        "last_route": self.speaker.last_route, "output": self.speaker.output},
+                        "last_route": self.speaker.last_route, "output": self.speaker.output,
+                        "engine": self.speaker.engine(), "pending": self.speaker.pending()},
             "cpu_temp": cpu_temp(),
             "load": round(os.getloadavg()[0], 2),
         }
