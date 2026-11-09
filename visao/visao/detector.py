@@ -104,6 +104,7 @@ class Detector:
         self.pending_accepts = {}  # member_id -> ts da última leitura aceita ainda sem confirmação
         self.speaker = Speaker(cfg.greeting, os.path.join(self.run_dir, "tts"))
         self.speaker.start()
+        self.greet_batch = None  # cumprimento esperando a janela para juntar o grupo
         self.greeted = {}       # member_id -> dia em que já foi cumprimentado (ou tentativa recente)
         self._temp, self._temp_ts, self._thermal_level = 0.0, 0.0, 0
         self.last_security = 0.0
@@ -229,6 +230,7 @@ class Detector:
             self.retention(now)
         if self.every("nightly", 600):
             self.nightly(now)
+        self.flush_greeting(now)
         self.drain_speaker()
         if self.pending_unknown:
             self.flush_unknown(now)
@@ -374,22 +376,44 @@ class Detector:
             self.greeted[member_id] = today
             return
         self.greeted[member_id] = ts
-        text = self.speaker.greet(self.gallery.names.get(member_id, ""), member_id)
-        log.info("cumprimento enfileirado: %s", text)
+        # não fala na hora: espera alguns segundos para juntar quem chegou junto
+        if self.greet_batch is None:
+            self.greet_batch = {"due": ts + self.cfg.greeting.group_window_s, "members": [],
+                                "people": 0}
+        if member_id not in self.greet_batch["members"]:
+            self.greet_batch["members"].append(member_id)
+
+    def flush_greeting(self, now):
+        """Cumprimenta quem foi identificado na janela: 1 pessoa pelo nome, 2 pelos nomes,
+        3 ou mais (ou gente não identificada junto) como grupo."""
+        b = self.greet_batch
+        if b is None:
+            return
+        b["people"] = max(b["people"], self.last_faces, len(self.tracker.tracks))
+        if now < b["due"]:
+            return
+        self.greet_batch = None
+        names = [self.gallery.names.get(m, "") for m in b["members"]]
+        text = self.speaker.greet(names, b["members"], b["people"])
+        log.info("cumprimento enfileirado (%d identificado(s), %d pessoa(s) na cena): %s",
+                 len(names), b["people"], text)
 
     def drain_speaker(self):
         """Só marca 'cumprimentado hoje' quando a câmera de fato falou."""
         while True:
             try:
-                member_id, ok, ts = self.speaker.results.get_nowait()
+                member_ids, ok, ts = self.speaker.results.get_nowait()
             except queue.Empty:
                 return
-            if member_id is None or not ok:
+            if not member_ids or not ok:
                 continue
+            if not isinstance(member_ids, (list, tuple)):
+                member_ids = [member_ids]
             today = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-            self.greeted[member_id] = today
-            self.con.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) "
-                             "DO UPDATE SET value=excluded.value", (f"greeted:{member_id}", today))
+            for member_id in member_ids:
+                self.greeted[member_id] = today
+                self.con.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) "
+                                 "DO UPDATE SET value=excluded.value", (f"greeted:{member_id}", today))
 
     def check_security(self, frame, now):
         """Modo segurança: movimento dentro do horário vigiado vira evento com foto e vídeo."""

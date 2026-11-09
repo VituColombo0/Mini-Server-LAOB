@@ -33,7 +33,12 @@ port = 8080
 [greeting]
 # Cumprimento falado pelo alto-falante da câmera na primeira vez que vê o membro no dia.
 enabled = true
-message = "{saudacao}, {nome}!"   # {saudacao} = Bom dia / Boa tarde / Boa noite
+# Frases sorteadas ({saudacao} = Bom dia / Boa tarde / Boa noite). Com 2 pessoas usa os dois
+# nomes; com 3 ou mais (ou alguém não identificado junto), cumprimenta o grupo.
+messages_one = ["{saudacao}, {nome}! Que bom te ver.", "Olá, {nome}! {saudacao}.", "{saudacao}, {nome}! Bom trabalho hoje."]
+messages_two = ["{saudacao}, {nome1} e {nome2}!", "Olá, {nome1} e {nome2}! {saudacao}."]
+messages_group = ["{saudacao}, pessoal! Que bom ver vocês.", "{saudacao} a todos!"]
+engine = "piper"                  # piper = voz neural natural; espeak = robótica (reserva)
 voice = "mb-br3"                  # mb-br1, mb-br3, mb-br4 ou pt-br
 # Por onde sai o som: "local" = caixinha/fone no conector AV da TV Box (ou HDMI),
 # "camera" = alto-falante da Tapo, "auto" = tenta a câmera e, se falhar, usa o local.

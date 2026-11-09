@@ -62,7 +62,19 @@ DEFAULTS = {
     },
     "greeting": {
         "enabled": True,
-        "message": "{saudacao}, {nome}!",   # {saudacao} = Bom dia / Boa tarde / Boa noite
+        # frases (sorteadas para não ficar repetitivo); {saudacao} = Bom dia / Boa tarde / Boa noite
+        "messages_one": ["{saudacao}, {nome}! Que bom te ver.",
+                         "Olá, {nome}! {saudacao}.",
+                         "{saudacao}, {nome}! Bom trabalho hoje."],
+        "messages_two": ["{saudacao}, {nome1} e {nome2}!",
+                         "Olá, {nome1} e {nome2}! {saudacao}."],
+        "messages_group": ["{saudacao}, pessoal! Que bom ver vocês.",
+                           "{saudacao} a todos!"],
+        "group_window_s": 6,                 # espera um pouco para cumprimentar quem chega junto
+        "engine": "piper",                   # piper (voz neural, natural) ou espeak (robótica, leve)
+        "piper_bin": "/opt/visao/piper/piper",
+        "piper_model": "/opt/visao/voices/pt_BR-faber-medium.onnx",
+        "piper_length_scale": 1.05,          # >1 fala mais devagar
         "once_per": "dia",                   # "dia" = só na primeira vez que vê a pessoa no dia
         "voice": "mb-br3",                   # espeak-ng: mb-br1, mb-br3, mb-br4 ou pt-br
         "speed": 145,

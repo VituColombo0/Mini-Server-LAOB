@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import queue
+import random
 import subprocess
 import threading
 import time
@@ -44,6 +45,8 @@ class Speaker:
         self.results = queue.Queue()  # (member_id, ok, ts) para o detector registrar
         self.last_ok, self.last_error, self.spoken, self.cam_fails = None, None, 0, 0
         self.last_route = None
+        self._synth_lock = threading.RLock()  # reentrante: o fallback do Piper chama synth de novo
+        self._piper_broken = False
         if gcfg.enabled and not self.enabled:
             self.last_error = "saída 'camera' sem a senha da conta Tapo (greeting.tapo_cloud_password)"
 
@@ -51,9 +54,23 @@ class Speaker:
         if self.enabled:
             threading.Thread(target=self._run, daemon=True, name="speaker").start()
 
-    def greet(self, name, member_id=None):
-        text = self.cfg.message.format(saudacao=saudacao(), nome=name)
-        self.say(text, member_id)
+    def phrase(self, names, people=None, hour=None, pick=None):
+        """Monta o cumprimento: individual, para duas pessoas ou para o grupo."""
+        names = list(names)
+        people = max(people or 0, len(names))
+        sau = saudacao(hour)
+        if people <= 1 and len(names) == 1:
+            options, fmt = self.cfg.messages_one, {"nome": names[0]}
+        elif people == 2 and len(names) == 2:
+            options, fmt = self.cfg.messages_two, {"nome1": names[0], "nome2": names[1]}
+        else:
+            options, fmt = self.cfg.messages_group, {}
+        tpl = options[pick % len(options)] if pick is not None else random.choice(options)
+        return tpl.format(saudacao=sau, **fmt)
+
+    def greet(self, names, member_ids, people=None):
+        text = self.phrase(names, people)
+        self.say(text, list(member_ids))
         return text
 
     def say(self, text, member_id=None):
@@ -71,26 +88,39 @@ class Speaker:
             return
 
         def work():
-            for name in names:
-                for s in ("Bom dia", "Boa tarde", "Boa noite"):
-                    try:
-                        self.synth(self.cfg.message.format(saudacao=s, nome=name))
-                    except Exception as e:
-                        log.warning("não gerou a frase de %s: %s", name, e)
-                        return
+            hour = datetime.now().hour
+            texts = [self.phrase([n], 1, hour, i) for n in names for i in range(len(self.cfg.messages_one))]
+            texts += [self.phrase([], 3, hour, i) for i in range(len(self.cfg.messages_group))]
+            for text in texts:  # só o período atual do dia; o resto é gerado quando precisar
+                try:
+                    self.synth(text)
+                except Exception as e:
+                    log.warning("não gerou a frase '%s': %s", text, e)
+                    return
         threading.Thread(target=work, daemon=True, name="tts-prewarm").start()
 
     def synth(self, text):
         """Gera (ou reaproveita) o WAV da frase."""
         pad = float(self.cfg.lead_silence_s)
-        key = hashlib.sha1(f"{self.cfg.voice}|{self.cfg.speed}|{self.cfg.volume}|{pad}|{text}"
-                           .encode()).hexdigest()[:16]
+        engine = self.engine()
+        voice = (f"piper|{self.cfg.piper_model}|{self.cfg.piper_length_scale}" if engine == "piper"
+                 else f"espeak|{self.cfg.voice}|{self.cfg.speed}|{self.cfg.volume}")
+        key = hashlib.sha1(f"{voice}|{pad}|{text}".encode()).hexdigest()[:16]
         path = os.path.join(self.cache, f"{key}.wav")
         if not os.path.exists(path):
             tmp = path + ".tmp.wav"
-            subprocess.run(["espeak-ng", "-v", self.cfg.voice, "-s", str(self.cfg.speed),
-                            "-a", str(self.cfg.volume), "-w", tmp, text],
-                           check=True, capture_output=True, timeout=30)
+            with self._synth_lock:
+                if engine == "piper":
+                    try:
+                        self._piper(text, tmp)
+                    except Exception as e:  # qualquer problema com o Piper: cai para o espeak
+                        log.warning("Piper falhou (%s); usando a voz do espeak", e)
+                        self._piper_broken = True
+                        return self.synth(text)
+                else:
+                    subprocess.run(["espeak-ng", "-v", self.cfg.voice, "-s", str(self.cfg.speed),
+                                    "-a", str(self.cfg.volume), "-w", tmp, text],
+                                   check=True, capture_output=True, timeout=30)
             # silêncio no começo: a câmera leva ~1-2 s para ativar o alto-falante e
             # "come" o início do áudio; sem isso, frases curtas somem inteiras
             with wave.open(tmp, "rb") as src:
@@ -102,6 +132,21 @@ class Speaker:
             os.remove(tmp)
             os.replace(path + ".pad.wav", path)
         return path
+
+    def engine(self):
+        if (str(self.cfg.engine).lower() == "piper" and not self._piper_broken
+                and os.path.exists(self.cfg.piper_bin) and os.path.exists(self.cfg.piper_model)):
+            return "piper"
+        return "espeak"
+
+    def _piper(self, text, out):
+        """Voz neural (Piper), offline. Bem mais natural que o espeak; lenta, por isso o cache."""
+        env = dict(os.environ, LD_LIBRARY_PATH=os.path.dirname(self.cfg.piper_bin),
+                   ESPEAK_DATA_PATH=os.path.join(os.path.dirname(self.cfg.piper_bin), "espeak-ng-data"))
+        subprocess.run([self.cfg.piper_bin, "--model", self.cfg.piper_model,
+                        "--length_scale", str(self.cfg.piper_length_scale),
+                        "--sentence_silence", "0.25", "--output_file", out],
+                       input=text.encode(), check=True, capture_output=True, timeout=120, env=env)
 
     def play_camera(self, path):
         src = f"ffmpeg:{path}#audio=pcma/8000#input=file"  # G.711 A-law 8 kHz mono, o que a C200 aceita
