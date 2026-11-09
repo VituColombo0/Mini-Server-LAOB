@@ -20,12 +20,14 @@ class Track:
     cur: tuple | None = None                       # (recorte, qualidade, apto) do ciclo atual
     last_emb: object = None
     last_emb_ts: float = 0.0
+    recheck: bool = False                          # sumiu por um tempo: conferir se ainda é a mesma pessoa
 
 
 class Tracker:
     def __init__(self, ttl=6.0):
         self.tracks = {}
         self.ttl = ttl
+        self.recheck_gap = 1.5
         self._ids = itertools.count(1)
 
     def update(self, faces, now):
@@ -48,6 +50,10 @@ class Tracker:
             used_f.add(fi)
             used_t.add(tid)
             t = self.tracks[tid]
+            # o rosto ficou sumido por um tempo e reapareceu no mesmo lugar: pode ser outra
+            # pessoa que sentou/parou ali; a identidade precisa ser conferida de novo
+            if t.member_id is not None and now - t.last_ts > self.recheck_gap:
+                t.recheck = True
             t.face, t.last_ts, t.hits, t.cur = faces[fi], now, t.hits + 1, None
             out.append((t, faces[fi]))
         for fi, f in enumerate(faces):

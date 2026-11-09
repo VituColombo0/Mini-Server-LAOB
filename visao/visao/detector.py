@@ -308,7 +308,7 @@ class Detector:
             if f.w < dc.min_face_px * 0.8:
                 continue
             fresh = len(t.attempts) < dc.max_attempts or ts - t.last_rec_ts > dc.retry_s
-            needs = (capturing or (t.member_id is None and fresh)
+            needs = (capturing or (t.member_id is None and fresh) or t.recheck
                      or (t.member_id is not None and ts - t.last_rec_ts > dc.reverify_s))
             if not needs:
                 continue  # rosto já identificado e conferido há pouco: não gasta CPU com ele
@@ -319,6 +319,8 @@ class Detector:
             if t.member_id is None:
                 if fresh:
                     cands.append((0, -q["q"], t))
+            elif t.recheck:
+                cands.append((0, -q["q"], t))
             elif ts - t.last_rec_ts > dc.reverify_s:
                 cands.append((1, -q["q"], t))
         cands.sort(key=lambda c: (c[0], c[1]))
@@ -346,9 +348,21 @@ class Detector:
         side = q.get("side", False)
         accepted = (m1 is not None and s1 >= (dc.accept_side if side else dc.accept)
                     and (s1 - s2) >= dc.margin * (2 if side else 1))
+        if t.recheck:
+            t.recheck = False
+            if t.member_id is not None and not (accepted and m1 == t.member_id) and not side:
+                # reapareceu e não bate mais com quem era: trata como rosto novo
+                log.info("track %d deixou de ser %s (reapareceu com %.2f)", t.id,
+                         self.gallery.names.get(t.member_id), s1)
+                t.member_id, t.member_score = None, 0.0
         if accepted and not self.confirmed(t, m1, s1, ts):
             # uma leitura só, sem muita certeza: espera a próxima confirmar (menos erros)
             log.debug("track %d: %s (%.2f) aguardando confirmação", t.id, self.gallery.names.get(m1), s1)
+            return
+        if accepted and not self.claim(t, m1, s1, ts):
+            # outro rosto visível agora já é essa pessoa, com mais certeza
+            if t.member_id == m1:
+                t.member_id, t.member_score = None, 0.0
             return
         if accepted:
             if t.member_id is None or (t.member_id != m1 and s1 >= t.member_score + 0.05):
@@ -399,11 +413,16 @@ class Detector:
         b = self.greet_batch
         if b is None:
             return
+        dc = self.cfg.detection
         visible = [t for t in self.tracker.tracks.values() if now - t.last_ts < 2.5]
-        b["people"] = max(b["people"], self.last_faces, len(visible))
+        # quem conta para o cumprimento: os membros a cumprimentar + rostos próximos ainda sem
+        # nome (visitante ou membro ainda sendo identificado). Quem já foi cumprimentado hoje e
+        # rostos pequenos lá no fundo não mudam a frase.
+        near_unknown = [t for t in visible if t.member_id is None and t.face.w >= dc.min_face_px]
+        b["people"] = max(b["people"], len(b["members"]) + len(near_unknown))
         # sozinho na cena (ou todos já identificados): fala já; com rosto ainda sem nome,
         # espera até group_window_s para ver se é outro membro e cumprimentar os dois/o grupo
-        waiting = any(t.member_id is None for t in visible)
+        waiting = bool(near_unknown)
         if now < b["due"] and (waiting or now - b["start"] < self.cfg.greeting.group_min_s):
             return
         self.greet_batch = None
@@ -477,15 +496,38 @@ class Detector:
                          "DO UPDATE SET value=excluded.value", (today,))
         log.info("manutenção noturna: backup e otimização do banco feitos")
 
+    def claim(self, t, m1, s1, ts):
+        """Uma pessoa não pode estar em dois rostos ao mesmo tempo. Se outro rosto visível
+        agora já é m1, fica com quem tem mais certeza; o outro volta a ser 'sem nome'."""
+        for o in self.tracker.tracks.values():
+            if o is t or o.member_id != m1:
+                continue
+            if ts - o.last_ts > 1.0:
+                o.member_id, o.member_score = None, 0.0  # resto de um acompanhamento que se perdeu
+                continue
+            if o.member_score >= s1:
+                return False
+            log.info("%s: trocou do rosto %d para o %d (%.2f > %.2f)", self.gallery.names.get(m1),
+                     o.id, t.id, s1, o.member_score)
+            o.member_id, o.member_score, o.recheck = None, 0.0, False
+        return True
+
     def confirmed(self, t, m1, s1, ts):
         """Aceita a identificação com certeza alta, ou quando duas leituras concordam."""
         dc = self.cfg.detection
         if t.member_id == m1 or s1 >= dc.strong_accept:
             return True
         prev = self.pending_accepts.get(m1)
-        self.pending_accepts[m1] = ts
+        self.pending_accepts[m1] = (ts, t.id)
         agree_track = sum(1 for a in t.attempts[:-1] if a[0] == m1 and a[1] >= dc.accept - 0.04)
-        return agree_track >= 1 or (prev is not None and ts - prev <= 20)
+        if agree_track >= 1:
+            return True
+        # leitura anterior em outro rosto: só vale se aquele rosto já sumiu (a pessoa reapareceu
+        # num acompanhamento novo); com os dois na cena, podem ser duas pessoas parecidas
+        if prev is None or ts - prev[0] > 20:
+            return False
+        other = self.tracker.tracks.get(prev[1])
+        return other is None or other is t or ts - other.last_ts > 1.0
 
     def low_reading(self, t, emb, aligned, frame, ts, s1, m1):
         """Junta leituras ruins parecidas entre si; com várias, alerta 'desconhecido'."""
@@ -522,18 +564,33 @@ class Detector:
             self.emit_unknown(p)
         self.pending_unknown = keep
 
+    def visitor_history(self, emb, ts):
+        """Procura a mesma pessoa não identificada nos dias anteriores (até a retenção)."""
+        seen, first, today_alerted = 0, None, False
+        day0 = datetime.fromtimestamp(ts).replace(hour=0, minute=0, second=0).timestamp()
+        for r in self.con.execute("SELECT ts, embedding FROM events WHERE kind='unknown' "
+                                  "AND embedding IS NOT NULL AND ts < ? ORDER BY ts", (ts - 60,)):
+            if float(db.blob_to_emb(r["embedding"]) @ emb) >= self.cfg.detection.same_visitor:
+                seen += 1
+                first = first or r["ts"]
+                today_alerted = today_alerted or r["ts"] >= day0
+        return seen, first, today_alerted
+
     def emit_unknown(self, p):
         ts, emb, s1, m1 = p["ts"], p["emb"], p["s1"], p["m1"]
+        seen, first, today_alerted = self.visitor_history(emb, ts)
+        details = (f"já visto {seen} vez(es) antes; a primeira em "
+                   f"{datetime.fromtimestamp(first).strftime('%d/%m %H:%M')}") if seen else "primeira vez"
         snap, crop = self.save_images("desconhecido", p["frame"], p["face"], p["aligned"], ts,
                                       p["track"], "Desconhecido", RED)
         cur = self.con.execute(
-            "INSERT INTO events(ts, kind, score, guess_member_id, snapshot_path, crop_path, embedding) "
-            "VALUES(?, 'unknown', ?, ?, ?, ?, ?)", (ts, s1, m1, snap, crop, db.emb_to_blob(emb)))
+            "INSERT INTO events(ts, kind, score, guess_member_id, snapshot_path, crop_path, embedding, details) "
+            "VALUES(?, 'unknown', ?, ?, ?, ?, ?, ?)", (ts, s1, m1, snap, crop, db.emb_to_blob(emb), details))
         self.schedule_clip(ts, cur.lastrowid, None)
-        log.warning("pessoa não identificada (similaridade máx. %.2f)", s1)
-        if self.cfg.telegram.notify_unknown:
+        log.warning("pessoa não identificada (similaridade máx. %.2f; %s)", s1, details)
+        if self.cfg.telegram.notify_unknown and not today_alerted:  # mesma pessoa: 1 aviso por dia
             hora = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-            self.notifier.send(f"⚠️ Pessoa não identificada no laboratório às {hora}",
+            self.notifier.send(f"⚠️ Pessoa não identificada no laboratório às {hora} ({details})",
                                os.path.join(self.data, snap))
 
     def on_entry(self, s, t, frame, aligned, ts, score, emb):
@@ -592,11 +649,15 @@ class Detector:
 
     def maybe_auto_enrich(self, member_id, emb, aligned, q, score, ts):
         dc = self.cfg.detection
-        if not dc.auto_enrich or score < dc.auto_enrich_score or q["q"] < 0.35:
-            return
-        if ts - self.last_auto.get(member_id, 0.0) < 120:
-            return
         sims = self.gallery.member_sims(member_id, emb)
+        # membro com poucas amostras (só a foto do cadastro): aprende mais rápido, com um
+        # limiar um pouco menor, até ter uma base boa
+        few = sims.size < dc.few_samples
+        min_score = dc.auto_enrich_score - (0.05 if few else 0.0)
+        if not dc.auto_enrich or score < min_score or q["q"] < (0.25 if few else 0.35):
+            return
+        if ts - self.last_auto.get(member_id, 0.0) < (30 if few else 120):
+            return
         if sims.size and float(sims.max()) >= 0.80:
             return  # já existe uma amostra quase igual
         autos = self.con.execute("SELECT id, crop_path FROM samples WHERE member_id=? AND source='auto' "

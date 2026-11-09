@@ -25,7 +25,8 @@
       {% if not m.active %}<span class="pill">inativo</span>{% endif %}
       <small>{{ m.n_ok }} amostra(s){% if m.n_pend %} · {{ m.n_pend }} processando{% endif %}</small>
       <small>{% if m.last_seen %}visto {{ m.last_seen|dt }}{% else %}nunca visto{% endif %}</small>
-      {% if m.n_ok == 0 %}<small class="warn-text">sem amostras: não será reconhecido</small>{% endif %}
+      {% if m.n_ok == 0 %}<small class="warn-text">sem amostras: não será reconhecido</small>
+      {% elif m.n_ok < 5 and m.active %}<small class="warn-text">poucas amostras: abra e use "Capturar pela câmera"</small>{% endif %}
     </div>
   </a>
   {% else %}

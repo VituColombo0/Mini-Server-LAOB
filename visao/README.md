@@ -15,19 +15,33 @@ Tapo C200 ──RTSP 720p──▶ ffmpeg (decodifica ~4 qps) ──▶ detector
 1. **Gatilho barato:** o detector só analisa continuamente quando a câmera avisa movimento
    (ONVIF), quando o pan/tilt está girando (a C200 segue as pessoas), quando há movimento na
    imagem ou quando há rostos sendo acompanhados. Parado, faz uma varredura a cada 20 s.
-2. **Detecção:** YuNet (OpenCV) no quadro inteiro reduzido para 640×360.
-3. **Qualidade:** só tenta reconhecer rostos com tamanho, nitidez e ângulo suficientes.
+2. **Detecção:** YuNet (OpenCV) no quadro inteiro reduzido para 576×324. Rosto novo ainda sem
+   nome é analisado sem pausa nos primeiros 15 s, mesmo com a pessoa parada.
+3. **Qualidade:** só tenta reconhecer rostos com tamanho e nitidez suficientes. Rosto de lado ou
+   de perfil também é reconhecido, mas com regra mais rígida (similaridade ≥ 0,33, vantagem
+   dobrada sobre o 2º mais parecido e sempre duas leituras).
 4. **Reconhecimento:** SFace (OpenCV) gera um vetor de 128 números por rosto, comparado com as
    amostras de cada membro. Rostos acompanhados entre ciclos não são reprocessados.
 5. **Identificação:** com certeza alta (≥ 0,50) basta uma leitura; abaixo disso, duas leituras
    precisam concordar. Cada membro gera no máximo uma identificação a cada `session_gap_min`
    (30 min), para não repetir o registro enquanto a pessoa continua na sala.
+   **Várias pessoas:** um membro nunca fica em dois rostos ao mesmo tempo (vence a leitura mais
+   certa); duas leituras fracas em rostos diferentes que estão na cena juntos não se confirmam
+   entre si; e se um rosto some e outro aparece no mesmo lugar (alguém sentou onde o outro
+   estava), a identidade é conferida de novo antes de continuar valendo.
 6. **Desconhecidos:** várias leituras ruins e parecidas entre si viram um alerta com foto (e
-   Telegram, se configurado). Rostos que não deu para decidir vão para a página **Revisão**.
+   Telegram, se configurado). O alerta diz se aquela pessoa **já foi vista antes** (e quando foi
+   a primeira vez); a mesma pessoa só gera um aviso no Telegram por dia. Rostos que não deu
+   para decidir vão para a página **Revisão**.
 7. **Aprendizado contínuo:** quando a certeza é alta, o sistema guarda novas amostras do membro
    (até 30; ao encher, troca a mais antiga), acompanhando a luz real do laboratório e mudanças
    de visual. Corrigir uma identificação errada (página Hoje → "corrigir") desfaz o que foi
-   aprendido naquela identificação e ensina o rosto à pessoa certa.
+   aprendido naquela identificação e ensina o rosto à pessoa certa. Membro com poucas amostras
+   (menos de 8) aprende mais rápido, até formar uma base boa; a página Membros avisa quem
+   precisa de "Capturar pela câmera".
+8. **Cumprimento:** sozinho na cena, fala logo após identificar. Com outros rostos próximos
+   ainda sem nome, espera até 5 s para juntar: dois membros → os dois nomes; com visitante ou
+   3+ pessoas → "pessoal". Quem já foi cumprimentado hoje não entra na conta.
 
 Desempenho medido na TV Box: detecção ~0,6 s por quadro, reconhecimento ~0,9 s por rosto,
 decodificação do 720p ~70% de um núcleo, gravação do 1080p ~20% de um núcleo.
@@ -89,6 +103,9 @@ visao-cli senha
 ```
 
 Logs: `journalctl -u visao-detector -f`.
+
+Teste dos cenários com várias pessoas (sem câmera, roda em segundos):
+`cd visao && /opt/visao/venv/bin/python -m tests.sim_multi`.
 
 ## Arquivos
 
