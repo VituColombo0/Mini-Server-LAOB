@@ -146,6 +146,8 @@ class Detector:
             self.update_sw_motion(frame, now)
             self.check_security(frame, now)
             mode = self.mode = self.activity(now)
+            # gente chegando (ou cumprimento esperando): CPU toda para reconhecer e falar
+            self.speaker.set_busy(mode == "ativo" or self.greet_batch is not None)
             dc = self.cfg.detection
             interval = {"ativo": 0.0, "estavel": dc.stable_interval_s,
                         "acompanhando": dc.idle_track_interval_s, "ocioso": dc.heartbeat_s}[mode]

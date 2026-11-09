@@ -11,6 +11,7 @@ import logging
 import os
 import queue
 import random
+import signal
 import subprocess
 import threading
 import time
@@ -51,6 +52,7 @@ class Speaker:
         self._gen_lock = threading.Lock()
         self._gen_list, self._gen_queued, self._gen_running = [], set(), False
         self._piper_broken, self._piper_fails = False, 0
+        self._piper_proc, self._paused = None, False
         if gcfg.enabled and not self.enabled:
             self.last_error = "saída 'camera' sem a senha da conta Tapo (greeting.tapo_cloud_password)"
 
@@ -158,6 +160,20 @@ class Speaker:
                 with self._gen_lock:
                     self._gen_queued.discard(text)
 
+    def set_busy(self, busy):
+        """O detector avisa quando há gente chegando: a geração da voz natural (pesada) é
+        congelada na hora (SIGSTOP) e volta de onde parou quando a cena acalma, para o
+        reconhecimento e o cumprimento não ficarem lentos."""
+        if busy == self._paused:
+            return
+        self._paused = busy
+        p = self._piper_proc
+        if p is not None and p.poll() is None:
+            try:
+                os.kill(p.pid, signal.SIGSTOP if busy else signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+
     def pending(self):
         with self._gen_lock:
             return len(self._gen_list)
@@ -207,10 +223,36 @@ class Speaker:
         mínima para não atrapalhar o reconhecimento, e o resultado fica guardado."""
         env = dict(os.environ, LD_LIBRARY_PATH=os.path.dirname(self.cfg.piper_bin),
                    ESPEAK_DATA_PATH=os.path.join(os.path.dirname(self.cfg.piper_bin), "espeak-ng-data"))
-        subprocess.run(["nice", "-n", "19", self.cfg.piper_bin, "--model", self.cfg.piper_model,
-                        "--length_scale", str(self.cfg.piper_length_scale),
-                        "--sentence_silence", "0.25", "--output_file", out],
-                       input=text.encode(), check=True, capture_output=True, timeout=600, env=env)
+        while self._paused:  # não começa uma frase nova enquanto há gente chegando
+            time.sleep(0.5)
+        p = subprocess.Popen(["nice", "-n", "19", self.cfg.piper_bin, "--model", self.cfg.piper_model,
+                              "--length_scale", str(self.cfg.piper_length_scale),
+                              "--sentence_silence", "0.25", "--output_file", out],
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                             env=env, start_new_session=True)
+        self._piper_proc = p
+        if self._paused:  # pausou entre a checagem e o início
+            os.kill(p.pid, signal.SIGSTOP)
+        try:
+            p.stdin.write(text.encode())
+            p.stdin.close()
+            run_s, last = 0.0, time.time()
+            while p.poll() is None:  # o tempo congelado não conta para o limite
+                time.sleep(0.2)
+                now = time.time()
+                if not self._paused:
+                    run_s += now - last
+                last = now
+                if run_s > 600:
+                    raise subprocess.TimeoutExpired(p.args, 600)
+            if p.returncode != 0:
+                raise subprocess.CalledProcessError(p.returncode, p.args, stderr=p.stderr.read())
+        finally:
+            self._piper_proc = None
+            if p.poll() is None:
+                os.kill(p.pid, signal.SIGCONT)
+                p.kill()
+                p.wait()
 
     def play_camera(self, path):
         src = f"ffmpeg:{path}#audio=pcma/8000#input=file"  # G.711 A-law 8 kHz mono, o que a C200 aceita
