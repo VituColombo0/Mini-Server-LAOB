@@ -618,6 +618,11 @@ class Detector:
         guess = self.presence.open.get(b["guess"]) if b["guess"] is not None else None
         if guess and b["score"] >= 0.12 and abs(b["ts"] - guess["last_seen_ts"]) < 120:
             return
+        # o mais parecido é um membro que está na sala (sessão aberta) e já tem a base
+        # completa: é ele de lado/de longe; não guarda mais fotos dele para revisar
+        if (guess and b["score"] >= 0.20
+                and self.gallery.member_sims(b["guess"], b["emb"]).size >= self.cfg.detection.enrich_until):
+            return
         # Mesma pessoa não identificada vista há pouco: um registro basta.
         for uts, uemb in self.recent_uncertain:
             if b["ts"] - uts < 300 and float(uemb @ b["emb"]) >= self.cfg.detection.same_person:
@@ -638,6 +643,8 @@ class Detector:
         t.hard = None
         if not dc.hard_learn or h is None or h["guess"] != t.member_id or ts - h["ts"] > 20:
             return
+        if self.gallery.member_sims(t.member_id, emb).size >= dc.enrich_until:
+            return  # base do membro já completa
         if float(h["emb"] @ emb) < 0.20:
             return  # pouco parecido com a leitura confirmada: o acompanhamento pode ter trocado de pessoa
         sims = self.gallery.member_sims(t.member_id, h["emb"])
@@ -650,6 +657,8 @@ class Detector:
     def maybe_auto_enrich(self, member_id, emb, aligned, q, score, ts):
         dc = self.cfg.detection
         sims = self.gallery.member_sims(member_id, emb)
+        if sims.size >= dc.enrich_until:
+            return  # base do membro já completa: para de capturar o rosto dele
         # membro com poucas amostras (só a foto do cadastro): aprende mais rápido, com um
         # limiar um pouco menor, até ter uma base boa
         few = sims.size < dc.few_samples

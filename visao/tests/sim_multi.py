@@ -124,4 +124,13 @@ seen, first, today = d.visitor_history(emb_of(9, 0.85), t0)
 check("visitante de ontem: 'já visto 1 vez', sem marcar aviso de hoje", seen == 1 and not today)
 seen, _, _ = d.visitor_history(emb_of(2, 0.9), t0)
 check("outra pessoa não é confundida com o visitante", seen == 0)
+# 9) membro com a base completa: não captura mais o rosto dele; com poucas amostras, captura
+d = make(); added = []
+d.add_sample = lambda mid, *a: added.append(mid)
+d.last_auto = {}
+d.gallery.matrix = np.stack([emb_of(1, 0.9) for _ in range(25)] + [base[2]]).astype(np.float32)
+d.gallery.labels = np.array([1] * 25 + [2])
+Detector.maybe_auto_enrich(d, 1, emb_of(1, 0.6), None, {"q": 0.9}, 0.6, t0)
+Detector.maybe_auto_enrich(d, 2, emb_of(2, 0.6), None, {"q": 0.9}, 0.6, t0)
+check("base completa (25): Victor não é mais capturado; Gazziro (1 amostra) é", added == [2])
 print("TUDO OK" if ok else "HÁ FALHAS")

@@ -21,6 +21,7 @@ DEFAULTS = {
         "yaw_max": 0.42,           # até aqui o rosto conta como "de frente" (0 = de frente)
         "yaw_side_max": 0.80,      # de lado/perfil até aqui: reconhece, mas pede accept_side
         "accept_side": 0.33,       # similaridade mínima para rosto de lado (sempre com 2 leituras)
+        "enrich_until": 25,        # com tantas amostras o membro está aprendido: para de capturar
         "few_samples": 8,          # membro com menos amostras que isso aprende mais rápido sozinho
         "same_visitor": 0.42,      # similaridade para dizer que um desconhecido já foi visto antes
         "retry_s": 6,              # rosto sem nome que esgotou as tentativas: tenta de novo a cada N s
