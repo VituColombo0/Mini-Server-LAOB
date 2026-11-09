@@ -346,7 +346,8 @@ class Detector:
         # guarda a leitura "difícil" deste rosto: se ele for confirmado depois, vira amostra
         if t.member_id is None and m1 is not None and 0.12 <= s1 < dc.accept and q["q"] >= 0.3 \
                 and (t.hard is None or s1 < t.hard["score"]):
-            t.hard = {"score": s1, "aligned": aligned, "emb": emb, "q": q["q"], "guess": m1, "ts": ts}
+            t.hard = {"score": s1, "aligned": aligned, "emb": emb, "q": q["q"], "guess": m1, "ts": ts,
+                      "learn": q.get("learn", False)}
         if t.best is None or q["q"] > t.best["q"]:
             t.best = {"q": q["q"], "aligned": aligned, "emb": emb, "frame": frame, "face": t.face,
                       "ts": ts, "guess": m1, "score": s1}
@@ -517,14 +518,7 @@ class Detector:
             self.con.execute("UPDATE events SET resolved = 1, member_id = ?, details = ? WHERE id = ?",
                              (m1, f"identificado depois, automaticamente ({s1:.2f})", r["id"]))
             done += 1
-            if (self.gallery.count(m1) + learned.get(m1, 0) < dc.few_samples and r["crop_path"]
-                    and learned.get(m1, 0) < 3):
-                img = cv2.imread(os.path.join(self.data, r["crop_path"]))
-                sims = self.gallery.member_sims(m1, emb)
-                if img is not None and not (sims.size and float(sims.max()) >= 0.80):
-                    self.add_sample(m1, "auto", img, emb, None, now,
-                                    f"aprendida da revisão automática ({s1:.2f})")
-                    learned[m1] = learned.get(m1, 0) + 1
+            # não vira amostra: o recorte guardado pode ser borrado ou de cima (sem como medir)
         if done:
             log.info("revisão automática: %d rosto(s) resolvido(s), %d virou(aram) amostra",
                      done, sum(learned.values()))
@@ -572,6 +566,9 @@ class Detector:
         dc = self.cfg.detection
         if t.member_id == m1 or s1 >= dc.strong_accept:
             return True
+        margin = t.attempts[-1][3] if t.attempts and len(t.attempts[-1]) > 3 else 0.0
+        if s1 >= dc.quick_accept and margin >= dc.quick_margin:
+            return True  # uma leitura boa e com folga grande sobre os outros membros basta
         prev = self.pending_accepts.get(m1)
         self.pending_accepts[m1] = (ts, t.id)
         agree_track = sum(1 for a in t.attempts[:-1] if a[0] == m1 and a[1] >= dc.accept - 0.04)
@@ -696,7 +693,8 @@ class Detector:
         longe, de lado) vira amostra. É o que mais melhora o reconhecimento nesses casos."""
         h, dc = t.hard, self.cfg.detection
         t.hard = None
-        if not dc.hard_learn or h is None or h["guess"] != t.member_id or ts - h["ts"] > 20:
+        if (not dc.hard_learn or h is None or not h.get("learn") or h["guess"] != t.member_id
+                or ts - h["ts"] > 20):
             return
         if self.gallery.member_sims(t.member_id, emb).size >= dc.enrich_until:
             return  # base do membro já completa
@@ -718,7 +716,7 @@ class Detector:
         # limiar um pouco menor, até ter uma base boa
         few = sims.size < dc.few_samples
         min_score = dc.boot_min if boot else dc.auto_enrich_score - (0.05 if few else 0.0)
-        if not dc.auto_enrich or score < min_score or q["q"] < (0.25 if few else 0.35):
+        if not dc.auto_enrich or score < min_score or not q.get("learn", True):
             return
         if ts - self.last_auto.get(member_id, 0.0) < (30 if few else 120):
             return

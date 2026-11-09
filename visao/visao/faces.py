@@ -40,6 +40,14 @@ class Face:
         eye_dist = float(np.linalg.norm(lm[0] - lm[1])) + 1e-6
         return float((lm[2][0] - eye_mid[0]) / eye_dist)
 
+    def pitch(self):
+        """Posição vertical do nariz entre os olhos e a boca (~0,45 de frente; perto de 1 =
+        olhando para baixo; perto de 0 = olhando para cima)."""
+        lm = self.row[4:14].reshape(5, 2)
+        eye_y = (lm[0][1] + lm[1][1]) / 2
+        mouth_y = (lm[3][1] + lm[4][1]) / 2
+        return float((lm[2][1] - eye_y) / (mouth_y - eye_y + 1e-6))
+
 
 def sharpness(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -92,7 +100,13 @@ class FaceEngine:
               and sh >= dc.sharp_min and face.score >= dc.rec_det_score)
         q = (min(face.w / 80.0, 1.5) * max(0.0, 1 - abs(yaw))
              * min(sh / 150.0, 1.5) * face.score)
+        pitch = face.pitch()
+        # serve de AMOSTRA (aprender) só rosto bom de verdade: de frente, sem olhar para baixo,
+        # nítido e grande. Reconhecer aceita bem mais que isso.
+        learn = (face.w >= dc.learn_min_px and abs(yaw) <= 0.30 and 0.30 <= pitch <= 0.70
+                 and sh >= dc.learn_sharp and face.score >= 0.8)
         return aligned, {"w": face.w, "yaw": yaw, "sharp": sh, "score": face.score, "q": q,
+                         "pitch": pitch, "learn": learn,
                          "side": side}, ok
 
     def enroll_image(self, img):

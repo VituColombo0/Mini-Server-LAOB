@@ -26,6 +26,10 @@ DEFAULTS = {
         "boot_min": 0.27,          # ...cada uma com pelo menos essa similaridade
         "boot_mean": 0.30,         # ...e média pelo menos essa
         "boot_margin": 0.08,       # ...e folga sobre o 2º mais parecido
+        "quick_accept": 0.42,      # 1 leitura basta se passar disso com folga >= quick_margin
+        "quick_margin": 0.15,
+        "learn_min_px": 48,        # amostra aprendida sozinha: rosto com pelo menos N px
+        "learn_sharp": 70.0,       # ...e nitidez mínima (evita guardar rosto borrado)
         "few_samples": 8,          # membro com menos amostras que isso aprende mais rápido sozinho
         "same_visitor": 0.42,      # similaridade para dizer que um desconhecido já foi visto antes
         "retry_s": 6,              # rosto sem nome que esgotou as tentativas: tenta de novo a cada N s
