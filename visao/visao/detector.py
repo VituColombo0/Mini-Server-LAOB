@@ -18,7 +18,7 @@ import threading
 import time
 import unicodedata
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import cv2
 import numpy as np
@@ -82,7 +82,8 @@ class Detector:
         os.makedirs(self.run_dir, exist_ok=True)
         self.db_path = os.path.join(self.data, "visao.db")
         self.con = db.connect(self.db_path)
-        self.engine = FaceEngine(st.models_dir, dc.det_width, dc.det_score_min, dc.threads)
+        self.engine = FaceEngine(st.models_dir, dc.det_width, dc.det_score_min, dc.threads,
+                                 classic=dc.classic_engine)
         self.gallery, self.gallery_version = Gallery(), None
         self.tracker = Tracker(ttl=dc.track_ttl_s)
         self.presence = Presence(self.con, cfg.presence.session_gap_min * 60)
@@ -333,7 +334,8 @@ class Detector:
             self.recognize(t, self.engine.embed(aligned), aligned, q, frame, ts)
         if self.capture is not None:
             self.capture_step(matched, ts)
-        self.write_live(frame, matched, ts)
+        if ts - self.last_live >= 1.0:  # a página Ao vivo atualiza a cada 2 s: não precisa a cada ciclo
+            self.write_live(frame, matched, ts)
 
     def recognize(self, t, emb, aligned, q, frame, ts):
         dc = self.cfg.detection
@@ -403,11 +405,23 @@ class Detector:
         elif t.member_id is None and len(self.gallery) and s1 < dc.unknown:
             self.low_reading(t, emb, aligned, frame, ts, s1, m1)
 
+    def greet_key(self, ts):
+        """Período do cumprimento. Padrão: manhã (5-12h), tarde (12-18h) e noite (18-5h); a
+        madrugada conta como a noite que começou no dia anterior (ninguém ouve 'boa noite' de
+        novo à meia-noite). Com once_per = "dia", um cumprimento por dia."""
+        dt = datetime.fromtimestamp(ts)
+        if str(self.cfg.greeting.once_per).lower() == "dia":
+            return dt.strftime("%Y-%m-%d")
+        if dt.hour < 5:
+            return (dt - timedelta(days=1)).strftime("%Y-%m-%d") + "/noite"
+        return dt.strftime("%Y-%m-%d") + ("/manha" if dt.hour < 12 else "/tarde" if dt.hour < 18 else "/noite")
+
     def maybe_greet(self, member_id, ts, seen_ts=None):
-        """Cumprimenta o membro na primeira identificação do dia (vale também após reiniciar)."""
+        """Cumprimenta o membro na primeira identificação de cada período (bom dia / boa tarde /
+        boa noite); vale também após reiniciar."""
         if not self.speaker.enabled:
             return
-        today = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        today = self.greet_key(ts)
         mark = self.greeted.get(member_id)
         if mark == today:
             return
@@ -419,7 +433,8 @@ class Detector:
         # só faz sentido cumprimentar quem está chegando: se a pessoa já está na sala há muito
         # tempo (passou da meia-noite trabalhando, ou ficou sem ser reconhecida), não fala
         s = self.presence.open.get(member_id)
-        if s and ts - s["start_ts"] > self.cfg.greeting.arrival_window_min * 60:
+        if (str(self.cfg.greeting.once_per).lower() == "dia" and s
+                and ts - s["start_ts"] > self.cfg.greeting.arrival_window_min * 60):
             self.greeted[member_id] = today
             return
         self.greeted[member_id] = ts
@@ -466,7 +481,7 @@ class Detector:
                 continue
             if not isinstance(member_ids, (list, tuple)):
                 member_ids = [member_ids]
-            today = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            today = self.greet_key(ts)
             for member_id in member_ids:
                 self.greeted[member_id] = today
                 self.con.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) "
@@ -538,7 +553,8 @@ class Detector:
             dst.close()
         for old in sorted(os.listdir(bdir))[:-3]:
             os.remove(os.path.join(bdir, old))
-        self.con.execute("DELETE FROM meta WHERE key LIKE 'greeted:%' AND value < ?", (today,))
+        yesterday = (dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        self.con.execute("DELETE FROM meta WHERE key LIKE 'greeted:%' AND value < ?", (yesterday,))
         self.con.execute("PRAGMA optimize")
         self.con.execute("VACUUM")
         self.con.execute("INSERT INTO meta(key, value) VALUES('nightly', ?) ON CONFLICT(key) "

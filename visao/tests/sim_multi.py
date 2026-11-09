@@ -21,9 +21,13 @@ def emb_of(m, sim):
 
 class FakeSpeaker:
     enabled = True
-    def __init__(self): self.said = []
+    def __init__(self):
+        import queue
+        self.said, self.results, self.now = [], queue.Queue(), 0
     def greet(self, names, ids, people):
-        self.said.append((sorted(names), people)); return f"{names} p={people}"
+        self.said.append((sorted(names), people))
+        self.results.put((list(ids), True, self.now))  # falou com sucesso
+        return f"{names} p={people}"
 
 class FakeEngine:
     def __init__(self): self.next = {}
@@ -69,7 +73,9 @@ def step(d, ts, people):
         m, s = by_x[round(f.center[0])]
         if t.member_id is None or t.recheck or ts - t.last_rec_ts > 45:
             d.recognize(t, emb_of(m, s), None, {"q": 0.8, "side": False}, None, ts)
+    d.speaker.now = ts
     d.flush_greeting(ts)
+    d.drain_speaker()
 
 def names(d):
     return {t.id: d.gallery.names.get(t.member_id) for t in d.tracker.tracks.values()}
@@ -133,12 +139,12 @@ d.gallery.labels = np.array([1] * 25 + [2])
 Detector.maybe_auto_enrich(d, 1, emb_of(1, 0.6), None, {"q": 0.9}, 0.6, t0)
 Detector.maybe_auto_enrich(d, 2, emb_of(2, 0.6), None, {"q": 0.9}, 0.6, t0)
 check("base completa (25): Victor não é mais capturado; Gazziro (1 amostra) é", added == [2])
-# 10) na sala desde antes da meia-noite (sessão aberta há 2 h): não cumprimenta no "novo dia"
-d = make()
+# 10) modo "1 por dia": na sala há 2 h (passou da meia-noite), não cumprimenta no "novo dia"
+d = make(); d.cfg.greeting["once_per"] = "dia"
 d.presence.seen(1, t0 - 7200, 0.6)
 for k in range(12): d.presence.touch(1, t0 - 7200 + 600 * (k + 1))  # visto o tempo todo
 for i in range(3): step(d, t0 + i, [(100, 1, 0.55)])
-check("já estava na sala há 2 h: não cumprimenta", d.speaker.said == [])
+check("modo 1 por dia: já estava na sala há 2 h, não cumprimenta", d.speaker.said == [])
 
 # 11) frases de dupla e de prewarm fazem sentido (com a classe real do Speaker)
 from visao.speaker import Speaker
@@ -167,4 +173,14 @@ d.reassess_review(t0)
 res = d.con.execute("SELECT member_id, resolved FROM events ORDER BY id").fetchall()
 check("revisão automática: Mario resolvido, visitante continua pendente",
       [tuple(r) for r in res] == [(3, 1), (None, 0)])
+# 15) um cumprimento por período: bom dia, depois boa tarde, mas não de novo à meia-noite
+d = make()
+day = time.mktime((2026, 11, 10, 9, 0, 0, 0, 0, -1))
+for i in range(3): step(d, day + i, [(100, 1, 0.55)])
+for i in range(3): step(d, day + 3600 + i, [(100, 1, 0.55)])            # 10h: mesma manhã
+for i in range(3): step(d, day + 5 * 3600 + i, [(100, 1, 0.55)])        # 14h: tarde
+for i in range(3): step(d, day + 11 * 3600 + i, [(100, 1, 0.55)])       # 20h: noite
+for i in range(3): step(d, day + 16 * 3600 + i, [(100, 1, 0.55)])       # 01h: mesma noite
+check("um cumprimento por período (manhã, tarde, noite; madrugada = mesma noite)",
+      len(d.speaker.said) == 3)
 print("TUDO OK" if ok else "HÁ FALHAS")

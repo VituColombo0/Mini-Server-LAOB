@@ -51,6 +51,7 @@ DEFAULTS = {
         "temp_critical": 85.0,     # °C: acima disso, bem mais espaçada (protege a TV Box)
         "frame_every": 4,          # usa 1 a cada N quadros do stream (15 fps -> ~4 fps)
         "threads": 4,
+        "classic_engine": True,    # motor clássico do OpenCV: ~30% mais rápido, mesmos resultados
         "auto_enrich": True,       # aprende novas amostras quando a certeza é alta
         "auto_enrich_score": 0.45,
         "hard_learn": True,        # aprende o ângulo difícil quando o mesmo rosto é confirmado depois
@@ -91,7 +92,7 @@ DEFAULTS = {
         "piper_bin": "/opt/visao/piper/piper",
         "piper_model": "/opt/visao/voices/pt_BR-faber-medium.onnx",
         "piper_length_scale": 1.05,          # >1 fala mais devagar
-        "once_per": "dia",                   # "dia" = só na primeira vez que vê a pessoa no dia
+        "once_per": "periodo",               # periodo = 1x de manhã, 1x à tarde, 1x à noite; "dia" = 1x por dia
         "voice": "mb-br3",                   # espeak-ng: mb-br1, mb-br3, mb-br4 ou pt-br
         "speed": 145,
         "volume": 180,
