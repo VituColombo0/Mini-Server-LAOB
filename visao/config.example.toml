@@ -37,7 +37,7 @@ message = "{saudacao}, {nome}!"   # {saudacao} = Bom dia / Boa tarde / Boa noite
 voice = "mb-br3"                  # mb-br1, mb-br3, mb-br4 ou pt-br
 # Por onde sai o som: "local" = caixinha/fone no conector AV da TV Box (ou HDMI),
 # "camera" = alto-falante da Tapo, "auto" = tenta a câmera e, se falhar, usa o local.
-output = "auto"
+output = "camera"
 local_device = "plughw:CARD=analog,DEV=0"   # HDMI: "plughw:CARD=HDMI,DEV=0"
 # Senha da CONTA TAPO (a do app), necessária para mandar áudio para a câmera.
 # Depois de preencher: visao-cli go2rtc-config && systemctl restart visao-go2rtc

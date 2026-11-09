@@ -476,7 +476,42 @@ def revisao():
         "SELECT e.*, gm.name AS guess_name FROM events e LEFT JOIN members gm ON gm.id = e.guess_member_id "
         "WHERE e.kind IN ('unknown','uncertain') AND e.resolved = 0 ORDER BY e.ts DESC LIMIT 150").fetchall()
     members = c.execute("SELECT id, name FROM members WHERE active = 1 ORDER BY name COLLATE NOCASE").fetchall()
-    return render_template("revisao.html", eventos=rows, membros=members)
+    grupos = c.execute(
+        "SELECT e.guess_member_id AS mid, gm.name, COUNT(*) AS n, ROUND(AVG(e.score), 2) AS media "
+        "FROM events e JOIN members gm ON gm.id = e.guess_member_id "
+        "WHERE e.kind IN ('unknown','uncertain') AND e.resolved = 0 AND e.score >= 0.15 "
+        "GROUP BY e.guess_member_id HAVING COUNT(*) >= 2 ORDER BY n DESC").fetchall()
+    return render_template("revisao.html", eventos=rows, membros=members, grupos=grupos)
+
+
+@app.route("/revisao/atribuir-palpite", methods=["POST"])
+@login_required
+def revisao_atribuir_palpite():
+    """Atribui de uma vez todos os não identificados cujo palpite é o membro escolhido."""
+    import numpy as np
+    c = con()
+    mid = request.form.get("member_id", type=int)
+    m = c.execute("SELECT name FROM members WHERE id = ?", (mid,)).fetchone()
+    if m is None:
+        abort(404)
+    rows = c.execute("SELECT * FROM events WHERE kind IN ('unknown','uncertain') AND resolved = 0 "
+                     "AND guess_member_id = ? AND score >= 0.15 ORDER BY score DESC", (mid,)).fetchall()
+    kept, added = [], 0
+    for e in rows:
+        if e["embedding"] and e["crop_path"] and os.path.isfile(os.path.join(DATA, e["crop_path"])):
+            emb = db.blob_to_emb(e["embedding"])
+            if all(float(k @ emb) < 0.90 for k in kept):  # evita amostras quase iguais
+                dst = os.path.join(member_dir(DATA, mid), f"revisao_{e['id']}.jpg")
+                shutil.copy(os.path.join(DATA, e["crop_path"]), dst)
+                c.execute("INSERT INTO samples(member_id, source, status, message, crop_path, embedding, "
+                          "created_at) VALUES(?, 'revisao', 'ok', 'atribuída em lote na revisão', ?, ?, ?)",
+                          (mid, os.path.relpath(dst, DATA), e["embedding"], time.time()))
+                kept.append(np.asarray(emb))
+                added += 1
+        c.execute("UPDATE events SET resolved = 1, member_id = ? WHERE id = ?", (mid, e["id"]))
+    db.bump_gallery(c)
+    flash(f"{len(rows)} rostos atribuídos a {m['name']} ({added} viraram amostras novas).", "ok")
+    return redirect(url_for("revisao"))
 
 
 @app.route("/revisao/<int:eid>/atribuir", methods=["POST"])

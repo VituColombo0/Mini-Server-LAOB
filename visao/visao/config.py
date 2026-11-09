@@ -20,7 +20,7 @@ DEFAULTS = {
         "min_face_px": 36,         # largura mínima do rosto (px no quadro 720p)
         "yaw_max": 0.35,           # quão de lado o rosto pode estar (0 = de frente)
         "sharp_min": 25.0,         # nitidez mínima do recorte
-        "accept": 0.36,            # similaridade mínima para identificar um membro
+        "accept": 0.32,            # similaridade mínima (com 2 leituras concordando abaixo de 0,50)
         "margin": 0.04,            # vantagem mínima sobre o 2º membro mais parecido
         "unknown": 0.26,           # abaixo disso a leitura conta como "desconhecido"
         "same_person": 0.36,       # para agrupar leituras do mesmo desconhecido
@@ -38,7 +38,8 @@ DEFAULTS = {
         "frame_every": 4,          # usa 1 a cada N quadros do stream (15 fps -> ~4 fps)
         "threads": 4,
         "auto_enrich": True,       # aprende novas amostras quando a certeza é alta
-        "auto_enrich_score": 0.48,
+        "auto_enrich_score": 0.45,
+        "hard_learn": True,        # aprende o ângulo difícil quando o mesmo rosto é confirmado depois
         "auto_enrich_max": 30,     # ao encher, a mais antiga é trocada pela nova
         "strong_accept": 0.50,     # acima disso basta uma leitura; abaixo, precisa de duas
     },
@@ -68,6 +69,7 @@ DEFAULTS = {
         "volume": 180,
         "output": "auto",                    # local (TV Box) | camera (Tapo) | auto (câmera, senão local)
         "local_device": "plughw:CARD=analog,DEV=0",  # conector AV; HDMI: plughw:CARD=HDMI,DEV=0
+        "lead_silence_s": 2.0,               # silêncio antes da frase (a câmera demora a ativar o som)
         "go2rtc_url": "http://127.0.0.1:1984",
         "stream": "camera",
         # O alto-falante da Tapo só aceita áudio pelo protocolo próprio da TP-Link, que pede a

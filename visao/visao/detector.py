@@ -99,6 +99,8 @@ class Detector:
         self.low = deque(maxlen=80)            # leituras com similaridade baixa (possível desconhecido)
         self.recent_unknown = deque(maxlen=50)  # (ts, embedding) de alertas já enviados
         self.recent_uncertain = deque(maxlen=50)
+        self.pending_unknown = []                 # alertas esperando confirmação (45 s)
+        self.recent_confirmed = deque(maxlen=60)  # (ts, embedding, member_id) reconhecidos
         self.pending_accepts = {}  # member_id -> ts da última leitura aceita ainda sem confirmação
         self.speaker = Speaker(cfg.greeting, os.path.join(self.run_dir, "tts"))
         self.speaker.start()
@@ -211,6 +213,7 @@ class Detector:
                 valid = set(self.gallery.names)
                 self.presence.drop_missing(valid)
                 self.tracker.forget_member(valid)
+                self.speaker.prewarm(sorted(self.gallery.names.values()))
                 log.info("galeria carregada: %d amostras de %d membros",
                          len(self.gallery), len(set(self.gallery.labels.tolist())))
         if self.every("pending", 3):
@@ -227,6 +230,8 @@ class Detector:
         if self.every("nightly", 600):
             self.nightly(now)
         self.drain_speaker()
+        if self.pending_unknown:
+            self.flush_unknown(now)
 
     def poll_capture(self, now):
         if self.capture is not None:
@@ -323,6 +328,10 @@ class Detector:
         m1, s1 = matches[0] if matches else (None, -1.0)
         s2 = matches[1][1] if len(matches) > 1 else -1.0
         t.attempts.append((m1, s1, q["q"]))
+        # guarda a leitura "difícil" deste rosto: se ele for confirmado depois, vira amostra
+        if t.member_id is None and m1 is not None and 0.12 <= s1 < dc.accept and q["q"] >= 0.3 \
+                and (t.hard is None or s1 < t.hard["score"]):
+            t.hard = {"score": s1, "aligned": aligned, "emb": emb, "q": q["q"], "guess": m1, "ts": ts}
         if t.best is None or q["q"] > t.best["q"]:
             t.best = {"q": q["q"], "aligned": aligned, "emb": emb, "frame": frame, "face": t.face,
                       "ts": ts, "guess": m1, "score": s1}
@@ -337,11 +346,13 @@ class Detector:
             if t.member_id != m1:
                 return  # leitura aponta outra pessoa, mas sem força para trocar: ignora
             t.member_score = max(t.member_score, s1)
+            self.recent_confirmed.append((ts, emb, m1))
             new = self.presence.seen(t.member_id, ts, s1)
             if new:
                 self.on_entry(new, t, frame, aligned, ts, s1, emb)
             self.maybe_greet(t.member_id, ts)
             self.maybe_auto_enrich(t.member_id, emb, aligned, q, s1, ts)
+            self.learn_hard(t, emb, ts)
             log.debug("track %d = %s (%.2f)", t.id, self.gallery.names.get(t.member_id), s1)
         elif t.member_id is not None and s1 < dc.unknown:
             # a reconfirmação falhou feio: provavelmente outra pessoa entrou no lugar
@@ -451,8 +462,31 @@ class Detector:
             if ts - uts < dc.unknown_cooldown_s and float(uemb @ emb) >= dc.same_person:
                 return  # mesma pessoa já gerou alerta há pouco
         self.recent_unknown.append((ts, emb))
-        snap, crop = self.save_images("desconhecido", frame, t.face, aligned, ts, t.id,
-                                      "Desconhecido", RED)
+        # não alerta na hora: se logo depois (ou pouco antes) um membro parecido for reconhecido,
+        # era ele num ângulo ruim, e o alerta é descartado em flush_unknown()
+        self.pending_unknown.append({"due": ts + 45, "ts": ts, "emb": emb, "aligned": aligned,
+                                     "frame": frame, "face": t.face, "track": t.id,
+                                     "s1": s1, "m1": m1})
+
+    def flush_unknown(self, now):
+        keep = []
+        for p in self.pending_unknown:
+            if now < p["due"]:
+                keep.append(p)
+                continue
+            match = next((r for r in self.recent_confirmed
+                          if abs(r[0] - p["ts"]) <= 90 and float(r[1] @ p["emb"]) >= 0.30), None)
+            if match is not None:
+                log.info("alerta de desconhecido descartado: era %s num ângulo ruim",
+                         self.gallery.names.get(match[2], "?"))
+                continue
+            self.emit_unknown(p)
+        self.pending_unknown = keep
+
+    def emit_unknown(self, p):
+        ts, emb, s1, m1 = p["ts"], p["emb"], p["s1"], p["m1"]
+        snap, crop = self.save_images("desconhecido", p["frame"], p["face"], p["aligned"], ts,
+                                      p["track"], "Desconhecido", RED)
         cur = self.con.execute(
             "INSERT INTO events(ts, kind, score, guess_member_id, snapshot_path, crop_path, embedding) "
             "VALUES(?, 'unknown', ?, ?, ?, ?, ?)", (ts, s1, m1, snap, crop, db.emb_to_blob(emb)))
@@ -500,6 +534,22 @@ class Detector:
             "VALUES(?, 'uncertain', ?, ?, ?, ?, ?)",
             (b["ts"], b["score"], b["guess"], snap, crop, db.emb_to_blob(b["emb"])))
         self.schedule_clip(b["ts"], cur.lastrowid, None)  # vídeo também de quem não foi identificado
+
+    def learn_hard(self, t, emb, ts):
+        """O mesmo rosto acompanhado foi confirmado: a leitura difícil de antes (ângulo ruim,
+        longe, de lado) vira amostra. É o que mais melhora o reconhecimento nesses casos."""
+        h, dc = t.hard, self.cfg.detection
+        t.hard = None
+        if not dc.hard_learn or h is None or h["guess"] != t.member_id or ts - h["ts"] > 20:
+            return
+        if float(h["emb"] @ emb) < 0.20:
+            return  # pouco parecido com a leitura confirmada: o acompanhamento pode ter trocado de pessoa
+        sims = self.gallery.member_sims(t.member_id, h["emb"])
+        if sims.size and float(sims.max()) >= 0.80:
+            return
+        self.add_sample(t.member_id, "auto", h["aligned"], h["emb"], h["q"], ts,
+                        f"ângulo difícil aprendido (era {h['score']:.2f})")
+        log.info("aprendeu ângulo difícil de %s (%.2f)", self.gallery.names.get(t.member_id), h["score"])
 
     def maybe_auto_enrich(self, member_id, emb, aligned, q, score, ts):
         dc = self.cfg.detection

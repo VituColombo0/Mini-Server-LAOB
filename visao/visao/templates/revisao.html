@@ -10,6 +10,22 @@
 <p class="muted">Rostos que o sistema viu mas não conseguiu identificar. Se for um membro, atribua: a
   foto vira uma nova amostra e o reconhecimento daquela pessoa melhora.</p>
 
+{% if grupos %}
+<section class="card">
+  <h2>Atribuir em lote</h2>
+  <p class="muted small">Confira as fotos abaixo antes: todos os rostos com aquele palpite serão atribuídos à pessoa.</p>
+  <div class="inline">
+  {% for g in grupos %}
+    <form method="post" action="{{ url_for('revisao_atribuir_palpite') }}"
+          onsubmit="return confirm('Atribuir os {{ g.n }} rostos com palpite {{ g.name }} a {{ g.name }}?')">
+      <input type="hidden" name="member_id" value="{{ g.mid }}">
+      <button class="btn ghost">Os {{ g.n }} parecidos com {{ g.name }} são {{ g.name }}</button>
+    </form>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% if eventos %}
 <section class="grid-review">
   {% for e in eventos %}

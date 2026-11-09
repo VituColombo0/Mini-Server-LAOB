@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import wave
 from datetime import datetime
 
 log = logging.getLogger("visao.speaker")
@@ -64,9 +65,25 @@ class Speaker:
             log.warning("fila de fala cheia; descartando: %s", text)
             self.results.put((member_id, False, time.time()))
 
+    def prewarm(self, names):
+        """Gera de antemão as frases de todos os membros (a fala sai ~1 s mais rápido)."""
+        if not self.enabled:
+            return
+
+        def work():
+            for name in names:
+                for s in ("Bom dia", "Boa tarde", "Boa noite"):
+                    try:
+                        self.synth(self.cfg.message.format(saudacao=s, nome=name))
+                    except Exception as e:
+                        log.warning("não gerou a frase de %s: %s", name, e)
+                        return
+        threading.Thread(target=work, daemon=True, name="tts-prewarm").start()
+
     def synth(self, text):
         """Gera (ou reaproveita) o WAV da frase."""
-        key = hashlib.sha1(f"{self.cfg.voice}|{self.cfg.speed}|{self.cfg.volume}|{text}"
+        pad = float(self.cfg.lead_silence_s)
+        key = hashlib.sha1(f"{self.cfg.voice}|{self.cfg.speed}|{self.cfg.volume}|{pad}|{text}"
                            .encode()).hexdigest()[:16]
         path = os.path.join(self.cache, f"{key}.wav")
         if not os.path.exists(path):
@@ -74,7 +91,16 @@ class Speaker:
             subprocess.run(["espeak-ng", "-v", self.cfg.voice, "-s", str(self.cfg.speed),
                             "-a", str(self.cfg.volume), "-w", tmp, text],
                            check=True, capture_output=True, timeout=30)
-            os.replace(tmp, path)
+            # silêncio no começo: a câmera leva ~1-2 s para ativar o alto-falante e
+            # "come" o início do áudio; sem isso, frases curtas somem inteiras
+            with wave.open(tmp, "rb") as src:
+                params, frames = src.getparams(), src.readframes(src.getnframes())
+            silence = b"\x00" * int(params.framerate * pad) * params.sampwidth * params.nchannels
+            with wave.open(path + ".pad.wav", "wb") as dst:
+                dst.setparams(params)
+                dst.writeframes(silence + frames + silence[: len(silence) // 2])
+            os.remove(tmp)
+            os.replace(path + ".pad.wav", path)
         return path
 
     def play_camera(self, path):

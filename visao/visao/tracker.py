@@ -15,6 +15,7 @@ class Track:
     last_rec_ts: float = 0.0
     attempts: list = field(default_factory=list)  # (member_id, score, qualidade)
     best: dict | None = None                       # melhor leitura (para revisão)
+    hard: dict | None = None                       # leitura de boa qualidade que não passou (ângulo difícil)
     reported: bool = False                         # já virou alerta de desconhecido
     cur: tuple | None = None                       # (recorte, qualidade, apto) do ciclo atual
     last_emb: object = None
