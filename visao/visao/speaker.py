@@ -15,14 +15,89 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import struct
 import wave
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
 log = logging.getLogger("visao.speaker")
+
+
+_SEG_END = np.array([0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF])
+
+
+def to_alaw(pcm16):
+    """PCM 16 bits -> G.711 A-law (o formato que o alto-falante da C200 recebe)."""
+    v = pcm16.astype(np.int32) >> 3
+    mask = np.where(v >= 0, 0xD5, 0x55)
+    v = np.where(v >= 0, v, -v - 1)
+    seg = np.searchsorted(_SEG_END, v)
+    aval = np.where(seg < 2, (v >> 1) & 0xF, (v >> np.minimum(seg, 7)) & 0xF) | (np.minimum(seg, 7) << 4)
+    aval = np.where(seg >= 8, 0x7F, aval)
+    return (aval ^ mask).astype(np.uint8)
+
+
+def resample(x, sr, out_sr=8000):
+    """Reamostra (com filtro passa-baixa) para 8 kHz, só com numpy."""
+    if sr == out_sr:
+        return x
+    spec = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(len(x), 1.0 / sr)
+    spec[freqs > out_sr * 0.475] = 0
+    y = np.fft.irfft(spec, len(x))
+    n = int(len(x) * out_sr / sr)
+    return np.interp(np.arange(n) * (sr / out_sr), np.arange(len(x)), y)
+
+
+def alaw_wav(data):
+    """Cabeçalho WAV para A-law 8 kHz mono (formato 6, como o ffmpeg grava)."""
+    fmt = struct.pack("<HHIIHHH", 6, 1, 8000, 8000, 1, 8, 0)
+    return (b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(data)) + b"WAVE"
+            + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(data)) + data)
+
+
+class _AudioServer:
+    """Servidor HTTP só em 127.0.0.1 que entrega a fala ao go2rtc no ritmo real.
+    Assim o go2rtc não precisa abrir o ffmpeg (que leva ~4 s só para iniciar na TV Box)."""
+
+    def __init__(self):
+        clips = self.clips = {}
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                item = clips.get(self.path.strip("/"))
+                if item is None:
+                    self.send_error(404)
+                    return
+                data = item["data"]
+                item["first"] = time.monotonic()
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                head, body = data[:46], data[46:]
+                self.wfile.write(head)
+                t0, sent, chunk = time.monotonic(), 0, 160  # 20 ms por pacote
+                burst = 1600  # 0,2 s adiantado para o go2rtc não ficar sem áudio
+                while sent < len(body):
+                    self.wfile.write(body[sent:sent + chunk])
+                    sent += chunk
+                    wait = t0 + (sent - burst) / 8000.0 - time.monotonic()
+                    if wait > 0:
+                        time.sleep(wait)
+                item["done"].set()
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True, name="audio-http").start()
 
 
 def saudacao(hour=None):
@@ -53,6 +128,8 @@ class Speaker:
         self._gen_list, self._gen_queued, self._gen_running = [], set(), False
         self._piper_broken, self._piper_fails = False, 0
         self._piper_proc, self._paused = None, False
+        self._audio = None
+        self.last_connect_s = None
         if gcfg.enabled and not self.enabled:
             self.last_error = "saída 'camera' sem a senha da conta Tapo (greeting.tapo_cloud_password)"
 
@@ -127,6 +204,7 @@ class Speaker:
         for h in hours:  # depois das individuais e de grupo, as duplas
             texts += [self.phrase([a, b], 2, h, i) for a, b in pairs
                       for i in range(len(self.cfg.messages_two))]
+        self.prepare_cached(texts)
         self.generate_later(texts)
 
     def generate_later(self, texts):
@@ -148,7 +226,8 @@ class Speaker:
                 text = self._gen_list.pop(0)
             try:
                 t0 = time.time()
-                self.synth(text, "piper")
+                path = self.synth(text, "piper")
+                self.prepare(path)
                 log.info("voz natural pronta (%.0f s): %s", time.time() - t0, text)
             except Exception as e:
                 self._piper_fails += 1
@@ -173,6 +252,26 @@ class Speaker:
                 os.kill(p.pid, signal.SIGSTOP if busy else signal.SIGCONT)
             except ProcessLookupError:
                 pass
+
+    def prepare(self, path):
+        """Deixa pronta a versão final que vai para a câmera (volume + A-law 8 kHz), para a
+        hora do cumprimento não gastar nem um segundo convertendo."""
+        try:
+            out = self.louder(path)
+            if self.camera_ok and self.cfg.camera_fast:
+                self.camera_wav(out)
+        except Exception as e:
+            log.warning("não foi possível preparar %s: %s", path, e)
+
+    def prepare_cached(self, texts):
+        """Frases já geradas antes desta versão: prepara a versão final em segundo plano."""
+        def run():
+            for t in texts:
+                p = self._path(t, "piper")
+                if os.path.exists(p):
+                    self.prepare(p)
+                    time.sleep(0.2)
+        threading.Thread(target=run, daemon=True, name="tts-prepare").start()
 
     def pending(self):
         with self._gen_lock:
@@ -254,7 +353,66 @@ class Speaker:
                 p.kill()
                 p.wait()
 
+    def camera_wav(self, path):
+        """Converte a frase (já com volume ajustado) para A-law 8 kHz e guarda ao lado."""
+        lead = min(float(self.cfg.camera_lead_s), float(self.cfg.lead_silence_s))
+        out = path[:-4] + f".alaw{int(round(lead * 100))}.wav"
+        if os.path.exists(out):
+            with open(out, "rb") as f:
+                return f.read()
+        with wave.open(path, "rb") as w:
+            sr, n, ch, sw = w.getframerate(), w.getnframes(), w.getnchannels(), w.getsampwidth()
+            raw = w.readframes(n)
+        if sw != 2:
+            raise ValueError("WAV precisa ser 16 bits")
+        x = np.frombuffer(raw, np.int16).astype(np.float64)
+        if ch > 1:
+            x = x.reshape(-1, ch).mean(axis=1)
+        # a frase guardada tem lead_silence_s de silêncio no começo; para a câmera basta
+        # camera_lead_s (o resto era espera do ffmpeg). Corta o excesso sem gerar a voz de novo.
+        cut = int((float(self.cfg.lead_silence_s) - lead) * sr)
+        if cut > 0 and not np.any(np.abs(x[:cut]) > 64):
+            x = x[cut:]
+        y = np.clip(np.round(resample(x, sr)), -32768, 32767).astype(np.int16)
+        data = alaw_wav(to_alaw(y).tobytes())
+        tmp = f"{out}.{threading.get_ident()}.tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, out)
+        return data
+
     def play_camera(self, path):
+        if self.cfg.camera_fast:
+            try:
+                return self._play_camera_fast(path)
+            except urllib.error.HTTPError:
+                raise
+            except Exception as e:  # conversão própria falhou: usa o caminho antigo (ffmpeg)
+                log.warning("envio rápido falhou (%s); usando o ffmpeg", e)
+        self._play_camera_ffmpeg(path)
+
+    def _play_camera_fast(self, path):
+        if self._audio is None:
+            self._audio = _AudioServer()
+        key = hashlib.sha1(path.encode()).hexdigest()[:12] + ".wav"
+        data = self.camera_wav(path)
+        item = self._audio.clips[key] = {"data": data, "first": None, "done": threading.Event()}
+        t0 = time.monotonic()
+        try:
+            src = f"http://127.0.0.1:{self._audio.port}/{key}"
+            url = (f"{self.cfg.go2rtc_url}/api/streams?dst={urllib.parse.quote(self.cfg.stream)}"
+                   f"&src={urllib.parse.quote(src, safe='')}")
+            with urllib.request.urlopen(urllib.request.Request(url, method="POST"), timeout=30) as r:
+                r.read()
+            # o go2rtc responde antes de terminar de tocar: espera o áudio sair todo
+            item["done"].wait(len(data) / 8000.0 + 5)
+            if item["first"] is not None:
+                self.last_connect_s = item["first"] - t0
+                log.info("câmera começou a receber a fala %.2f s após o pedido", self.last_connect_s)
+        finally:
+            self._audio.clips.pop(key, None)
+
+    def _play_camera_ffmpeg(self, path):
         src = f"ffmpeg:{path}#audio=pcma/8000#input=file"  # G.711 A-law 8 kHz mono, o que a C200 aceita
         url = (f"{self.cfg.go2rtc_url}/api/streams?dst={urllib.parse.quote(self.cfg.stream)}"
                f"&src={urllib.parse.quote(src, safe='')}")

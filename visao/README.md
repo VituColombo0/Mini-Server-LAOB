@@ -55,6 +55,11 @@ Desempenho medido na TV Box (motor clássico do OpenCV 5, ~30% mais rápido que 
 resultados idênticos): detecção ~0,35–0,48 s por quadro, reconhecimento ~0,63 s por rosto,
 decodificação do 720p ~70% de um núcleo, gravação do 1080p ~20% de um núcleo.
 
+**Tempo até falar:** a fala vai para a câmera já convertida (A-law 8 kHz, feita em numpy e
+guardada junto da frase), servida ao go2rtc por um HTTP local no ritmo real. Antes o go2rtc
+abria o ffmpeg a cada frase, e o ffmpeg leva ~4 s só para iniciar na TV Box (carrega 210
+bibliotecas); agora a câmera começa a receber o áudio em ~0,1–0,5 s.
+
 ## Proteções e manutenção
 
 - **Watchdog de hardware:** se a TV Box travar (sistema parado por mais de 30 s), o próprio

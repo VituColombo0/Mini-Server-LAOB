@@ -99,6 +99,8 @@ DEFAULTS = {
         "output": "auto",                    # local (TV Box) | camera (Tapo) | auto (câmera, senão local)
         "local_device": "plughw:CARD=analog,DEV=0",  # conector AV; HDMI: plughw:CARD=HDMI,DEV=0
         "lead_silence_s": 2.0,               # silêncio antes da frase (a câmera demora a ativar o som)
+        "camera_lead_s": 0.8,                # silêncio antes da fala na câmera (tempo de ativar o alto-falante)
+        "camera_fast": True,                 # envia a fala já convertida, sem abrir o ffmpeg (~4 s mais rápido)
         "loudness": 1.5,                     # volume da fala: 1.0 = original, 1.5 = +50%
         "go2rtc_url": "http://127.0.0.1:1984",
         "stream": "camera",
