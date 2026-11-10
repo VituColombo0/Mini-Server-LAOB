@@ -142,6 +142,12 @@ sudo tailscale up --ssh
 
 ## Visão: identificação por reconhecimento facial
 
+> **Evolução:** o Visão segue agora no repositório **[Willbert](https://github.com/VituColombo0/Willbert)**,
+> rodando num PC (tempo real, modelo de linguagem local, conversa por voz). A versão daqui
+> continua mantida como **reserva**: se o PC cair, a TV Box assume; ela também grava os
+> clipes, vigia o PC e guarda backup dos cadastros.
+
+
 Módulo em [`visao/`](visao/README.md) que usa uma câmera **Tapo C200** (RTSP + ONVIF) para registrar
 **quem foi identificado no laboratório e quando**, com foto e vídeo. Tudo roda na própria TV Box.
 
