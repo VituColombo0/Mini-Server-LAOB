@@ -63,7 +63,10 @@ class FrameSource:
                 backoff = min(backoff * 2, 60)
                 continue
             self.size = (w, h)
-            cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-rtsp_transport", "tcp",
+            # prioridade acima do reconhecimento: com os 4 núcleos ocupados reconhecendo, a
+            # decodificação ficava para trás e o detector analisava imagens de até 7 s atrás.
+            cmd = ["nice", "-n", "-10",
+                   "ffmpeg", "-nostdin", "-loglevel", "error", "-rtsp_transport", "tcp",
                    "-timeout", "10000000", "-threads", "1",
                    # sem buffer de entrada: o quadro analisado é o mais recente possível
                    "-fflags", "nobuffer", "-flags", "low_delay", "-i", self.url, "-an",
