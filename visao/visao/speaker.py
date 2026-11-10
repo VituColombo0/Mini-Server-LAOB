@@ -7,10 +7,12 @@ Saídas (greeting.output):
 O detector só enfileira; a fala roda numa thread separada.
 """
 import hashlib
+import json
 import logging
 import os
 import queue
 import random
+import re
 import signal
 import subprocess
 import threading
@@ -168,21 +170,28 @@ class Speaker:
         e deixa a voz natural sendo gerada para a próxima vez (nunca atrasa o cumprimento)."""
         options = self.candidates(names, people)
         if self.engine() == "piper":
-            ready = next((t for t in options if os.path.exists(self._path(t, "piper"))), None)
-            if ready is not None:
-                self.say(ready, list(member_ids), "piper")
-                return ready
+            # 1º a voz escolhida; enquanto ela gera as frases, a voz anterior (se tiver a frase)
+            for model, ls in [(self.cfg.piper_model, self.cfg.piper_length_scale)] + \
+                    [(m, 1.0) if isinstance(m, str) else tuple(m) for m in self.cfg.piper_fallback]:
+                for t in options:
+                    path = self._path(t, "piper", model, ls)
+                    if os.path.exists(path):
+                        self.say(t, list(member_ids), "piper", path)
+                        if model != self.cfg.piper_model:
+                            self.generate_later([t])
+                            return t + " (voz anterior; a nova está sendo gerada)"
+                        return t
             self.generate_later([options[0]])
             self.say(options[0], list(member_ids), "espeak")
             return options[0] + " (voz reserva; a natural está sendo gerada)"
         self.say(options[0], list(member_ids), "espeak")
         return options[0]
 
-    def say(self, text, member_id=None, engine=None):
+    def say(self, text, member_id=None, engine=None, path=None):
         if not self.enabled:
             return
         try:
-            self.q.put_nowait((text, member_id, engine))
+            self.q.put_nowait((text, member_id, engine, path))
         except queue.Full:
             log.warning("fila de fala cheia; descartando: %s", text)
             self.results.put((member_id, False, time.time()))
@@ -277,9 +286,11 @@ class Speaker:
         with self._gen_lock:
             return len(self._gen_list)
 
-    def _path(self, text, engine):
+    def _path(self, text, engine, model=None, length_scale=None):
         pad = float(self.cfg.lead_silence_s)
-        voice = (f"piper|{self.cfg.piper_model}|{self.cfg.piper_length_scale}" if engine == "piper"
+        model = model or self.cfg.piper_model
+        ls = self.cfg.piper_length_scale if length_scale is None else length_scale
+        voice = (f"piper|{model}|{ls}" if engine == "piper"
                  else f"espeak|{self.cfg.voice}|{self.cfg.speed}|{self.cfg.volume}")
         key = hashlib.sha1(f"{voice}|{pad}|{text}".encode()).hexdigest()[:16]
         return os.path.join(self.cache, f"{key}.wav")
@@ -324,9 +335,10 @@ class Speaker:
                    ESPEAK_DATA_PATH=os.path.join(os.path.dirname(self.cfg.piper_bin), "espeak-ng-data"))
         while self._paused:  # não começa uma frase nova enquanto há gente chegando
             time.sleep(0.5)
+        extra, text = self._compat(text)
         p = subprocess.Popen(["nice", "-n", "19", self.cfg.piper_bin, "--model", self.cfg.piper_model,
                               "--length_scale", str(self.cfg.piper_length_scale),
-                              "--sentence_silence", "0.25", "--output_file", out],
+                              "--sentence_silence", "0.25", "--output_file", out] + extra,
                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                              env=env, start_new_session=True)
         self._piper_proc = p
@@ -352,6 +364,40 @@ class Speaker:
                 os.kill(p.pid, signal.SIGCONT)
                 p.kill()
                 p.wait()
+
+    def _compat(self, text):
+        """Vozes treinadas no Piper 1.5 (ex.: Jeff, Cadu) usam ditongos ("oɪ", "aɪ"...) como um
+        fonema só, o que o Piper instalado não entende. Para elas o Visão mesmo converte o texto
+        em fonemas (espeak-ng), troca cada ditongo por um símbolo de 1 caractere e manda ao Piper
+        no modo "texto = fonemas", com uma cópia ajustada da configuração da voz."""
+        src = self.cfg.piper_model + ".json"
+        try:
+            with open(src) as f:
+                cfg = json.load(f)
+        except OSError:
+            return [], text
+        idmap = cfg.get("phoneme_id_map", {})
+        if all(len(k) == 1 for k in idmap):
+            return [], text  # voz antiga: o Piper resolve sozinho
+        clusters = ["".join(c) for c in cfg.get("vowel_clusters", []) if "".join(c) in idmap]
+        priv = {c: chr(0xE000 + i) for i, c in enumerate(clusters)}
+        comp = os.path.join(self.cache, os.path.basename(self.cfg.piper_model) + ".compat.json")
+        if not os.path.exists(comp) or os.path.getmtime(comp) < os.path.getmtime(src):
+            m = {k: v for k, v in idmap.items() if len(k) == 1}
+            for c, ch in priv.items():
+                m[ch] = idmap[c]
+            cfg.update(phoneme_id_map=m, phoneme_type="text", phoneme_map={})
+            with open(comp + ".tmp", "w") as f:
+                json.dump(cfg, f, ensure_ascii=False)
+            os.replace(comp + ".tmp", comp)
+        parts = re.findall(r"([^,.!?;:]+)([,.!?;:]*)", text)
+        ipa = subprocess.run(["espeak-ng", "-q", "-v", cfg.get("espeak", {}).get("voice", "pt-br"), "--ipa"],
+                             input="\n".join(p[0] for p in parts), capture_output=True, text=True,
+                             check=True, timeout=30).stdout.replace("\u200d", "").strip().split("\n")
+        phon = " ".join(line.strip() + p[1] for line, p in zip(ipa, parts))
+        for c, ch in priv.items():
+            phon = phon.replace(c, ch)
+        return ["-c", comp], phon
 
     def camera_wav(self, path):
         """Converte a frase (já com volume ajustado) para A-law 8 kHz e guarda ao lado."""
@@ -488,10 +534,10 @@ class Speaker:
 
     def _run(self):
         while True:
-            text, member_id, engine = self.q.get()
+            text, member_id, engine, path = self.q.get()
             ok = False
             try:
-                self.last_route = self.play(self.synth(text, engine))
+                self.last_route = self.play(path or self.synth(text, engine))
                 self.last_ok, self.last_error, ok = time.time(), None, True
                 self.spoken += 1
                 log.info("falou (%s): %s", self.last_route, text)
@@ -503,7 +549,7 @@ class Speaker:
             self.results.put((member_id, ok, time.time()))
             if not self.enabled:
                 while not self.q.empty():
-                    _, mid, _ = self.q.get_nowait()
+                    _, mid, _, _ = self.q.get_nowait()
                     self.results.put((mid, False, time.time()))
                 return
             time.sleep(1)

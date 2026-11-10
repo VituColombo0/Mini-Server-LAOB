@@ -49,7 +49,10 @@ Tapo C200 ──RTSP 720p──▶ ffmpeg (decodifica ~4 qps) ──▶ detector
    (5–12 h, "bom dia"), à tarde (12–18 h, "boa tarde") e à noite (18–5 h, "boa noite"); a
    madrugada conta como a mesma noite. Quem já foi cumprimentado no período não entra na conta
    (`once_per = "dia"` volta a um cumprimento por dia). As frases de cada membro, do grupo e das duplas
-   ficam prontas com antecedência na voz natural.
+   ficam prontas com antecedência na voz natural (Piper, voz brasileira **Jeff**). Vozes do
+   Piper 1.5 como a Jeff usam ditongos como um fonema só, que o Piper instalado não entende:
+   o Visão converte o texto em fonemas pelo espeak-ng e entrega pronto. Enquanto uma voz nova
+   gera as frases, os cumprimentos usam a frase pronta da voz anterior (`piper_fallback`).
 
 Desempenho medido na TV Box (motor clássico do OpenCV 5, ~30% mais rápido que o novo e com
 resultados idênticos): detecção ~0,35–0,48 s por quadro, reconhecimento ~0,63 s por rosto,
