@@ -48,7 +48,7 @@ if [ ! -x "$BASE/piper/piper" ]; then
     "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_armv7l.tar.gz"
   tar -xzf /tmp/piper.tgz -C "$BASE/piper" --strip-components=1 && rm -f /tmp/piper.tgz
 fi
-for spk in jeff faber; do   # jeff = voz padrão; faber = reserva enquanto a jeff gera as frases
+for spk in faber; do   # outras vozes pt_BR do Piper: jeff, cadu (Piper 1.5; o Visão adapta)
   VOICE=pt_BR-$spk-medium
   for ext in onnx onnx.json; do
     [ -s "$BASE/voices/$VOICE.$ext" ] || curl -fsSL --retry 5 -o "$BASE/voices/$VOICE.$ext" \
