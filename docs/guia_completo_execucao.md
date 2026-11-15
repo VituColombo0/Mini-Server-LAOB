@@ -247,8 +247,8 @@ Você pode mudar o DNS **manualmente em cada dispositivo**:
 ```
 🛡️  AdGuard Home     →  http://IP_DA_MXQ:3000
 📁  Samba (Arquivos) →  \\IP_DA_MXQ\Compartilhado
-🌐  Dashboard Geral  →  http://IP_DA_MXQ:8080 (Login: vimora / SENHA_REMOVIDA)
-📂  Arquivos Web     →  http://IP_DA_MXQ:8082 (Login: vimora / SENHA_REMOVIDA)
+🌐  Dashboard Geral  →  http://IP_DA_MXQ:8080 (Login: SERVER_USER / SERVER_PASS do credenciais.env)
+📂  Arquivos Web     →  http://IP_DA_MXQ:8082 (Login: SERVER_USER / SERVER_PASS do credenciais.env)
 📊  Uptime Kuma      →  http://IP_DA_MXQ:3001
 🐳  Portainer        →  http://IP_DA_MXQ:9000
 ```
@@ -257,13 +257,13 @@ Você pode mudar o DNS **manualmente em cada dispositivo**:
 > Nunca tire o MicroSD da TV Box! Qualquer alteração ou correção pode ser feita 100% à distância:
 
 ```
-💻  Terminal Web Root    →  http://IP_DA_MXQ:7681 (Login: Lirool / SENHA_REMOVIDA)
+💻  Terminal Web Root    →  http://IP_DA_MXQ:7681 (Login: MASTER_USER / MASTER_PASS do credenciais.env)
     ↳ Dá acesso a um terminal Bash interativo no navegador direto como ROOT!
 
-📝  Editor de Arquivos   →  http://IP_DA_MXQ:8082 (Login: Lirool / SENHA_REMOVIDA)
+📝  Editor de Arquivos   →  http://IP_DA_MXQ:8082 (Login: MASTER_USER / MASTER_PASS do credenciais.env)
     ↳ Abre todo o sistema de arquivos ("/") com editor embutido para reescrever qualquer arquivo.
 
-🔒  SSH Master           →  ssh Lirool@IP_DA_MXQ (Senha: SENHA_REMOVIDA, sudo sem senha)
+🔒  SSH Master           →  ssh Lirool@IP_DA_MXQ (senha: MASTER_PASS do credenciais.env, sudo sem senha)
 
 🔄  Atualização da Nuvem →  No terminal web ou SSH, execute: mxq-update --apply
     ↳ Faz git pull do GitHub e reaplica os scripts automaticamente!

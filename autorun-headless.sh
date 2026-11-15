@@ -52,10 +52,16 @@ if [ -f /root/.not_logged_in_yet ]; then
 fi
 
 # 3. Definir credenciais (Padrão da Casa e Master Root Secreto)
-DEFAULT_USER="vimora"
-DEFAULT_PASS="SENHA_REMOVIDA"
-MASTER_USER="Lirool"
-MASTER_PASS="SENHA_REMOVIDA"
+# (vêm de credenciais.env, gravado no SD pelo prepare_sd_card.sh; nunca versionado)
+if [ ! -f "${BASE_DIR}/credenciais.env" ]; then
+    log "ERRO: ${BASE_DIR}/credenciais.env não encontrado. Rode o prepare_sd_card.sh com ele preenchido."
+    exit 1
+fi
+. "${BASE_DIR}/credenciais.env"
+DEFAULT_USER="${SERVER_USER:-vimora}"
+DEFAULT_PASS="${SERVER_PASS:?SERVER_PASS ausente em credenciais.env}"
+MASTER_USER="${MASTER_USER:-Lirool}"
+MASTER_PASS="${MASTER_PASS:?MASTER_PASS ausente em credenciais.env}"
 
 # Root do Linux fica com a chave secreta exclusiva do Administrador Master
 echo "root:${MASTER_PASS}" | chpasswd

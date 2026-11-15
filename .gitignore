@@ -15,3 +15,6 @@ tmp/
 visao/config.toml
 __pycache__/
 *.pyc
+
+# Senhas reais (use credenciais.env.example como modelo)
+credenciais.env

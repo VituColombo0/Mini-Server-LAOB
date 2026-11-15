@@ -24,13 +24,17 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 BOLD='\033[1m'
 
+# Senhas ficam fora do Git: copie credenciais.env.example para credenciais.env e preencha.
+_CRED="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/credenciais.env"
+[ -f "$_CRED" ] && . "$_CRED"
+
 # ── Credenciais de Usuário Padrão da Casa ───────────────────────────────────
 SERVER_USER="${SERVER_USER:-vimora}"
-SERVER_PASS="${SERVER_PASS:-SENHA_REMOVIDA}"
+SERVER_PASS="${SERVER_PASS:?Defina SERVER_PASS em credenciais.env}"
 
 # ── Credenciais MASTER / ROOT (Apenas o Administrador sabe) ─────────────────
 MASTER_USER="${MASTER_USER:-Lirool}"
-MASTER_PASS="${MASTER_PASS:-SENHA_REMOVIDA}"
+MASTER_PASS="${MASTER_PASS:?Defina MASTER_PASS em credenciais.env}"
 
 # ── Portas dos Serviços ────────────────────────────────────────────────────
 ADGUARD_PORT=3000
